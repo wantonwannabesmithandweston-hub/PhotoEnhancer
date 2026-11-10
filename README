@@ -1,0 +1,24 @@
+PhotoEnhancer
+
+A private Android photo enhancement app.
+
+Privacy
+
+- All photo processing happens locally on the Android device.
+- Photos are never uploaded to a cloud service or remote server.
+- Enhanced photos are stored in private app storage.
+- Original photos are never overwritten.
+- No internet connection is required for photo enhancement.
+
+Features
+
+- Select a photo from the phone.
+- Enhance photos using on-device processing.
+- Balanced enhancement is the default.
+- Preview enhanced photos before saving.
+- Preserve original image dimensions.
+- Save enhanced copies privately.
+
+Project status
+
+Development in progress.
