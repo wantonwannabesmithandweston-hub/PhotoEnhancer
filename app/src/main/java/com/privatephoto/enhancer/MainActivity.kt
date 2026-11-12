@@ -558,11 +558,52 @@ class MainActivity : Activity() {
     }
 
     
-@Deprecated("Deprecated in Android")
-override fun onActivityResult(
-    requestCode: Int,
-    resultCode: Int,
-    data: Intent?
+
+    @Deprecated("Deprecated in Android")
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?
+    ) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (resultCode != RESULT_OK) return
+
+        if (requestCode == SAVE_DOCUMENT) {
+            data?.data?.let { uri ->
+                saveBitmapToUri(uri)
+            }
+            return
+        }
+
+        if (requestCode == PICK_IMAGE) {
+            selectedImage = data?.data
+
+            val uri = selectedImage ?: return
+
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                // Temporary permission is sufficient.
+            }
+
+            enhancedBitmap = null
+            imageView.setImageURI(uri)
+            saveButton.isEnabled = false
+            statusText.text = "Original photo loaded"
+        }
+    }
+
+    override fun onDestroy() {
+        executor.shutdownNow()
+        enhancedBitmap?.recycle()
+        enhancedBitmap = null
+        super.onDestroy()
+    }
+
 ) {
     super.onActivityResult(requestCode, resultCode, data)
 
