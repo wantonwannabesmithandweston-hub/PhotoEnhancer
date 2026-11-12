@@ -88,9 +88,12 @@ class MainActivity : Activity() {
         layout.addView(uploadButton)
 
         uploadButton.setOnClickListener {
-            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
-                type = "image/*"
-            }
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+    addCategory(Intent.CATEGORY_OPENABLE)
+    type = "image/*"
+    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+}
             startActivityForResult(intent, PICK_IMAGE)
         }
 
