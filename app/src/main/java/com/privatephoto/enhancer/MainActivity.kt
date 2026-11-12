@@ -184,9 +184,12 @@ class MainActivity : Activity() {
                     inJustDecodeBounds = true
                 }
 
-                contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, bounds)
-                } ?: throw Exception("Cannot read photo")
+                val boundsStream = contentResolver.openInputStream(uri)
+    ?: throw Exception("Cannot open photo")
+
+boundsStream.use {
+    BitmapFactory.decodeStream(it, null, bounds)
+}
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                     throw Exception("Invalid photo")
