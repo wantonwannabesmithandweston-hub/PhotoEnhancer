@@ -1,5 +1,4 @@
 
-
 package com.privatephoto.enhancer
 
 import android.app.Activity
@@ -30,7 +29,6 @@ class MainActivity : Activity() {
     private var selectedImage: Uri? = null
 
     private val strengthButtons = mutableMapOf<String, Button>()
-
     private val executor = Executors.newSingleThreadExecutor()
 
     private fun dp(value: Int): Int =
@@ -63,14 +61,15 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(35, 35, 35))
         }
 
-        val imageParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(320)
-        ).apply {
-            setMargins(0, dp(20), 0, dp(20))
-        }
-
-        layout.addView(imageView, imageParams)
+        layout.addView(
+            imageView,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(320)
+            ).apply {
+                setMargins(0, dp(20), 0, dp(20))
+            }
+        )
 
         val uploadButton = Button(this).apply {
             text = "Upload Picture"
@@ -102,7 +101,8 @@ class MainActivity : Activity() {
 
         layout.addView(strengthText)
 
-        for (strength in listOf("Low", "Balanced", "High")) {
+        listOf("Low", "Balanced", "High").forEach { strength ->
+
             val button = Button(this).apply {
                 text = strength
             }
@@ -151,21 +151,18 @@ class MainActivity : Activity() {
     }
 
     private fun updateStrengthButtons() {
+
         strengthText.text = "Selected: $selectedStrength"
 
-        for ((strength, button) in strengthButtons) {
-            button.text = if (strength == selectedStrength) {
-                "✓ $strength"
-            } else {
-                strength
-            }
+        strengthButtons.forEach { (strength, button) ->
+
+            val selected = strength == selectedStrength
+
+            button.text =
+                if (selected) "✓ $strength" else strength
 
             button.setTextColor(
-                if (strength == selectedStrength) {
-                    Color.GREEN
-                } else {
-                    Color.WHITE
-                }
+                if (selected) Color.GREEN else Color.WHITE
             )
         }
     }
@@ -175,48 +172,53 @@ class MainActivity : Activity() {
         val strength = selectedStrength
 
         enhanceButton.isEnabled = false
-        statusText.text = "Enhancing photo..."
+        statusText.text = "Processing your photo..."
 
         executor.execute {
+
+            var original: Bitmap? = null
+
             try {
-                val options = BitmapFactory.Options().apply {
+
+                val bounds = BitmapFactory.Options().apply {
                     inJustDecodeBounds = true
                 }
 
                 contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, options)
+                    BitmapFactory.decodeStream(it, null, bounds)
                 } ?: throw Exception("Cannot read photo")
 
-                if (options.outWidth <= 0 || options.outHeight <= 0) {
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                     throw Exception("Invalid photo")
                 }
 
                 var sample = 1
 
                 while (
-                    options.outWidth / sample > 1600 ||
-                    options.outHeight / sample > 1600
+                    bounds.outWidth / sample > 1600 ||
+                    bounds.outHeight / sample > 1600
                 ) {
                     sample *= 2
                 }
 
-                val decodeOptions = BitmapFactory.Options().apply {
+                val options = BitmapFactory.Options().apply {
                     inSampleSize = sample
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
 
-                val original =
-                    contentResolver.openInputStream(uri)?.use {
-                        BitmapFactory.decodeStream(
-                            it, null, decodeOptions
-                        )
-                    } ?: throw Exception("Could not decode photo")
+                original = contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, options)
+                } ?: throw Exception("Could not decode photo")
 
-                val enhanced = processImage(original, strength)
+                val enhanced = processImage(original!!, strength)
+
+                original?.recycle()
+                original = null
 
                 runOnUiThread {
 
                     imageView.setImageBitmap(enhanced)
+                    imageView.invalidate()
 
                     statusText.text =
                         "Enhancement complete! ($strength)"
@@ -232,7 +234,10 @@ class MainActivity : Activity() {
 
             } catch (e: Exception) {
 
+                original?.recycle()
+
                 runOnUiThread {
+
                     statusText.text =
                         "Enhancement failed: ${e.message}"
 
@@ -260,9 +265,15 @@ class MainActivity : Activity() {
         }
 
         val sharpness = when (strength) {
-            "Low" -> 0.15f
-            "High" -> 0.55f
-            else -> 0.30f
+            "Low" -> 0.20f
+            "High" -> 0.70f
+            else -> 0.40f
+        }
+
+        val brightness = when (strength) {
+            "Low" -> 3f
+            "High" -> 9f
+            else -> 6f
         }
 
         val width = source.width
@@ -276,6 +287,7 @@ class MainActivity : Activity() {
         )
 
         for (y in 0 until height) {
+
             for (x in 0 until width) {
 
                 val index = y * width + x
@@ -312,7 +324,8 @@ class MainActivity : Activity() {
                         c + sharpness * (c - blur)
 
                     val adjusted =
-                        (sharpened - 128f) * contrast + 128f
+                        (sharpened - 128f) * contrast +
+                        128f + brightness
 
                     return adjusted.roundToInt()
                         .coerceIn(0, 255)
@@ -332,8 +345,15 @@ class MainActivity : Activity() {
             height,
             Bitmap.Config.ARGB_8888
         ).also {
+
             it.setPixels(
-                output, 0, width, 0, 0, width, height
+                output,
+                0,
+                width,
+                0,
+                0,
+                width,
+                height
             )
         }
     }
@@ -345,7 +365,9 @@ class MainActivity : Activity() {
         data: Intent?
     ) {
         super.onActivityResult(
-            requestCode, resultCode, data
+            requestCode,
+            resultCode,
+            data
         )
 
         if (requestCode == 100 && resultCode == RESULT_OK) {
@@ -353,14 +375,16 @@ class MainActivity : Activity() {
             selectedImage = data?.data
 
             if (selectedImage != null) {
+
                 imageView.setImageURI(selectedImage)
+
                 statusText.text = "Original photo loaded"
             }
         }
     }
 
     override fun onDestroy() {
-        executor.shutdown()
+        executor.shutdownNow()
         super.onDestroy()
     }
 }
