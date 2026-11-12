@@ -1,13 +1,18 @@
 
+
 package com.privatephoto.enhancer
 
 import android.app.Activity
 import android.os.Bundle
 import android.content.Intent
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.Gravity
 import android.widget.Button
 import android.widget.ImageView
@@ -24,12 +29,17 @@ class MainActivity : Activity() {
     private lateinit var strengthText: TextView
     private lateinit var statusText: TextView
     private lateinit var enhanceButton: Button
+    private lateinit var saveButton: Button
 
     private var selectedStrength = "Balanced"
     private var selectedImage: Uri? = null
+    private var enhancedBitmap: Bitmap? = null
 
     private val strengthButtons = mutableMapOf<String, Button>()
     private val executor = Executors.newSingleThreadExecutor()
+
+    private val PICK_IMAGE = 100
+    private val SAVE_DOCUMENT = 101
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).roundToInt()
@@ -65,7 +75,7 @@ class MainActivity : Activity() {
             imageView,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(320)
+                dp(350)
             ).apply {
                 setMargins(0, dp(20), 0, dp(20))
             }
@@ -81,7 +91,7 @@ class MainActivity : Activity() {
             val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                 type = "image/*"
             }
-            startActivityForResult(intent, 100)
+            startActivityForResult(intent, PICK_IMAGE)
         }
 
         val label = TextView(this).apply {
@@ -130,6 +140,13 @@ class MainActivity : Activity() {
 
         layout.addView(statusText)
 
+        saveButton = Button(this).apply {
+            text = "Save Enhanced Photo to Gallery"
+            isEnabled = false
+        }
+
+        layout.addView(saveButton)
+
         enhanceButton.setOnClickListener {
             val uri = selectedImage
 
@@ -142,6 +159,10 @@ class MainActivity : Activity() {
             } else {
                 enhancePhoto(uri)
             }
+        }
+
+        saveButton.setOnClickListener {
+            saveEnhancedPhoto()
         }
 
         scroll.addView(layout)
@@ -172,6 +193,8 @@ class MainActivity : Activity() {
         val strength = selectedStrength
 
         enhanceButton.isEnabled = false
+        saveButton.isEnabled = false
+
         statusText.text = "Processing your photo..."
 
         executor.execute {
@@ -184,12 +207,9 @@ class MainActivity : Activity() {
                     inJustDecodeBounds = true
                 }
 
-                val boundsStream = contentResolver.openInputStream(uri)
-    ?: throw Exception("Cannot open photo")
-
-boundsStream.use {
-    BitmapFactory.decodeStream(it, null, bounds)
-}
+                contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, bounds)
+                } ?: throw Exception("Cannot open photo")
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                     throw Exception("Invalid photo")
@@ -220,17 +240,21 @@ boundsStream.use {
 
                 runOnUiThread {
 
-                    imageView.setImageBitmap(enhanced)
+                    enhancedBitmap = enhanced
+
+                    imageView.setImageBitmap(enhancedBitmap)
+                    imageView.visibility = ImageView.VISIBLE
                     imageView.invalidate()
 
                     statusText.text =
                         "Enhancement complete! ($strength)"
 
                     enhanceButton.isEnabled = true
+                    saveButton.isEnabled = true
 
                     Toast.makeText(
                         this,
-                        "Your enhanced photo is ready!",
+                        "Enhanced photo is ready! You can now save it.",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -245,12 +269,181 @@ boundsStream.use {
                         "Enhancement failed: ${e.message}"
 
                     enhanceButton.isEnabled = true
+                    saveButton.isEnabled = false
 
                     Toast.makeText(
                         this,
-                        "Enhancement failed",
+                        "Enhancement failed: ${e.message}",
                         Toast.LENGTH_LONG
                     ).show()
+                }
+            }
+        }
+    }
+
+    private fun saveEnhancedPhoto() {
+
+        val bitmap = enhancedBitmap
+
+        if (bitmap == null) {
+            Toast.makeText(
+                this,
+                "Enhance a photo first",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        saveButton.isEnabled = false
+        statusText.text = "Saving enhanced photo..."
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+
+            executor.execute {
+
+                var savedUri: Uri? = null
+
+                try {
+
+                    val filename =
+                        "Enhanced_${System.currentTimeMillis()}.jpg"
+
+                    val values = ContentValues().apply {
+                        put(
+                            MediaStore.Images.Media.DISPLAY_NAME,
+                            filename
+                        )
+                        put(
+                            MediaStore.Images.Media.MIME_TYPE,
+                            "image/jpeg"
+                        )
+                        put(
+                            MediaStore.Images.Media.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES +
+                                "/Private Photo Enhancer"
+                        )
+                        put(
+                            MediaStore.Images.Media.IS_PENDING,
+                            1
+                        )
+                    }
+
+                    savedUri = contentResolver.insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        values
+                    ) ?: throw Exception("Could not create photo")
+
+                    val success = contentResolver
+                        .openOutputStream(savedUri!!)?.use {
+                            bitmap.compress(
+                                Bitmap.CompressFormat.JPEG,
+                                95,
+                                it
+                            )
+                        } ?: false
+
+                    if (!success) {
+                        throw Exception("Could not write photo")
+                    }
+
+                    val finished = ContentValues().apply {
+                        put(
+                            MediaStore.Images.Media.IS_PENDING,
+                            0
+                        )
+                    }
+
+                    contentResolver.update(
+                        savedUri!!,
+                        finished,
+                        null,
+                        null
+                    )
+
+                    runOnUiThread {
+                        statusText.text = "Photo saved to Gallery!"
+                        saveButton.isEnabled = true
+
+                        Toast.makeText(
+                            this,
+                            "Photo saved successfully!",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+
+                } catch (e: Exception) {
+
+                    savedUri?.let {
+                        contentResolver.delete(it, null, null)
+                    }
+
+                    runOnUiThread {
+                        statusText.text =
+                            "Save failed: ${e.message}"
+
+                        saveButton.isEnabled = true
+
+                        Toast.makeText(
+                            this,
+                            "Could not save photo",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            }
+
+        } else {
+
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "image/jpeg"
+                putExtra(
+                    Intent.EXTRA_TITLE,
+                    "Enhanced_Photo.jpg"
+                )
+            }
+
+            startActivityForResult(intent, SAVE_DOCUMENT)
+        }
+    }
+
+    private fun saveBitmapToUri(uri: Uri) {
+
+        val bitmap = enhancedBitmap ?: return
+
+        executor.execute {
+
+            try {
+
+                val success = contentResolver
+                    .openOutputStream(uri)?.use {
+                        bitmap.compress(
+                            Bitmap.CompressFormat.JPEG,
+                            95,
+                            it
+                        )
+                    } ?: false
+
+                if (!success) {
+                    throw Exception("Could not write photo")
+                }
+
+                runOnUiThread {
+                    statusText.text = "Photo saved successfully!"
+                    saveButton.isEnabled = true
+
+                    Toast.makeText(
+                        this,
+                        "Enhanced photo saved!",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+
+            } catch (e: Exception) {
+
+                runOnUiThread {
+                    statusText.text = "Save failed: ${e.message}"
+                    saveButton.isEnabled = true
                 }
             }
         }
@@ -373,13 +566,27 @@ boundsStream.use {
             data
         )
 
-        if (requestCode == 100 && resultCode == RESULT_OK) {
+        if (resultCode != RESULT_OK) return
+
+        if (requestCode == SAVE_DOCUMENT) {
+
+            data?.data?.let {
+                saveBitmapToUri(it)
+            }
+
+            return
+        }
+
+        if (requestCode == PICK_IMAGE) {
 
             selectedImage = data?.data
 
             if (selectedImage != null) {
 
+                enhancedBitmap = null
                 imageView.setImageURI(selectedImage)
+
+                saveButton.isEnabled = false
 
                 statusText.text = "Original photo loaded"
             }
