@@ -557,11 +557,45 @@ class MainActivity : Activity() {
         }
     }
 
-    @Deprecated("Deprecated in Android")
-    override fun onActivityResult(
-        requestCode: Int,
-        resultCode: Int,
-        data: Intent?
+    
+@Deprecated("Deprecated in Android")
+override fun onActivityResult(
+    requestCode: Int,
+    resultCode: Int,
+    data: Intent?
+) {
+    super.onActivityResult(requestCode, resultCode, data)
+
+    if (resultCode != RESULT_OK) return
+
+    if (requestCode == SAVE_DOCUMENT) {
+        data?.data?.let {
+            saveBitmapToUri(it)
+        }
+        return
+    }
+
+    if (requestCode == PICK_IMAGE) {
+        selectedImage = data?.data
+
+        selectedImage?.let { uri ->
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                // Continue with temporary permission.
+            }
+
+            enhancedBitmap = null
+            imageView.setImageURI(uri)
+            saveButton.isEnabled = false
+            statusText.text = "Original photo loaded"
+        }
+    }
+}
+
     ) {
         super.onActivityResult(
             requestCode,
