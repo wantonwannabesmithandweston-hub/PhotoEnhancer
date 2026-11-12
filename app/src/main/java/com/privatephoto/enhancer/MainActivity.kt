@@ -584,6 +584,16 @@ class MainActivity : Activity() {
 
             selectedImage = data?.data
 
+selectedImage?.let { uri ->
+    try {
+        contentResolver.takePersistableUriPermission(
+            uri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION
+        )
+    } catch (e: Exception) {
+        // Temporary access may still be available.
+    }
+
             if (selectedImage != null) {
 
                 enhancedBitmap = null
