@@ -1,4 +1,5 @@
 
+
 package com.privatephoto.enhancer
 
 import android.app.Activity
@@ -12,6 +13,7 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.util.concurrent.Executors
@@ -21,83 +23,120 @@ class MainActivity : Activity() {
 
     private lateinit var imageView: ImageView
     private lateinit var strengthText: TextView
+    private lateinit var statusText: TextView
+    private lateinit var enhanceButton: Button
 
     private var selectedStrength = "Balanced"
     private var selectedImage: Uri? = null
 
+    private val strengthButtons = mutableMapOf<String, Button>()
+
     private val executor = Executors.newSingleThreadExecutor()
+
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).roundToInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val layout = LinearLayout(this)
-        layout.orientation = LinearLayout.VERTICAL
-        layout.gravity = Gravity.CENTER
-        layout.setPadding(30, 30, 30, 30)
-        layout.setBackgroundColor(Color.rgb(20, 20, 20))
+        val scroll = ScrollView(this)
 
-        val title = TextView(this)
-        title.text = "Private Photo Enhancer"
-        title.textSize = 26f
-        title.setTextColor(Color.WHITE)
-        title.gravity = Gravity.CENTER
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            setBackgroundColor(Color.rgb(20, 20, 20))
+        }
+
+        val title = TextView(this).apply {
+            text = "Private Photo Enhancer"
+            textSize = 26f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+
         layout.addView(title)
 
-        imageView = ImageView(this)
-        imageView.adjustViewBounds = true
-        imageView.scaleType = ImageView.ScaleType.FIT_CENTER
+        imageView = ImageView(this).apply {
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.rgb(35, 35, 35))
+        }
 
         val imageParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 350
-        )
-        imageParams.setMargins(0, 25, 0, 25)
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(320)
+        ).apply {
+            setMargins(0, dp(20), 0, dp(20))
+        }
+
         layout.addView(imageView, imageParams)
 
-        val uploadButton = Button(this)
-        uploadButton.text = "Upload Picture"
+        val uploadButton = Button(this).apply {
+            text = "Upload Picture"
+        }
+
         layout.addView(uploadButton)
 
         uploadButton.setOnClickListener {
-            val intent = Intent(Intent.ACTION_GET_CONTENT)
-            intent.type = "image/*"
+            val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+            }
             startActivityForResult(intent, 100)
         }
 
-        val label = TextView(this)
-        label.text = "Enhancement Strength"
-        label.textSize = 20f
-        label.setTextColor(Color.WHITE)
-        label.gravity = Gravity.CENTER
+        val label = TextView(this).apply {
+            text = "Enhancement Strength"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+
         layout.addView(label)
 
-        strengthText = TextView(this)
-        strengthText.text = "Selected: Balanced"
-        strengthText.textSize = 16f
-        strengthText.setTextColor(Color.GREEN)
-        strengthText.gravity = Gravity.CENTER
+        strengthText = TextView(this).apply {
+            textSize = 17f
+            setTextColor(Color.GREEN)
+            gravity = Gravity.CENTER
+        }
+
         layout.addView(strengthText)
 
         for (strength in listOf("Low", "Balanced", "High")) {
-            val button = Button(this)
-            button.text = strength
+            val button = Button(this).apply {
+                text = strength
+            }
+
+            strengthButtons[strength] = button
             layout.addView(button)
 
             button.setOnClickListener {
                 selectedStrength = strength
-                strengthText.text = "Selected: $strength"
+                updateStrengthButtons()
             }
         }
 
-        val enhanceButton = Button(this)
-        enhanceButton.text = "Enhance Photo"
+        enhanceButton = Button(this).apply {
+            text = "Enhance Photo"
+        }
+
         layout.addView(enhanceButton)
+
+        statusText = TextView(this).apply {
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }
+
+        layout.addView(statusText)
 
         enhanceButton.setOnClickListener {
             val uri = selectedImage
 
             if (uri == null) {
                 Toast.makeText(
-                    this, "Please upload a photo first",
+                    this,
+                    "Please upload a photo first",
                     Toast.LENGTH_SHORT
                 ).show()
             } else {
@@ -105,16 +144,38 @@ class MainActivity : Activity() {
             }
         }
 
-        setContentView(layout)
+        scroll.addView(layout)
+        setContentView(scroll)
+
+        updateStrengthButtons()
+    }
+
+    private fun updateStrengthButtons() {
+        strengthText.text = "Selected: $selectedStrength"
+
+        for ((strength, button) in strengthButtons) {
+            button.text = if (strength == selectedStrength) {
+                "✓ $strength"
+            } else {
+                strength
+            }
+
+            button.setTextColor(
+                if (strength == selectedStrength) {
+                    Color.GREEN
+                } else {
+                    Color.WHITE
+                }
+            )
+        }
     }
 
     private fun enhancePhoto(uri: Uri) {
+
         val strength = selectedStrength
 
-        Toast.makeText(
-            this, "Enhancing photo...",
-            Toast.LENGTH_SHORT
-        ).show()
+        enhanceButton.isEnabled = false
+        statusText.text = "Enhancing photo..."
 
         executor.execute {
             try {
@@ -124,9 +185,14 @@ class MainActivity : Activity() {
 
                 contentResolver.openInputStream(uri)?.use {
                     BitmapFactory.decodeStream(it, null, options)
+                } ?: throw Exception("Cannot read photo")
+
+                if (options.outWidth <= 0 || options.outHeight <= 0) {
+                    throw Exception("Invalid photo")
                 }
 
                 var sample = 1
+
                 while (
                     options.outWidth / sample > 1600 ||
                     options.outHeight / sample > 1600
@@ -136,6 +202,7 @@ class MainActivity : Activity() {
 
                 val decodeOptions = BitmapFactory.Options().apply {
                     inSampleSize = sample
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
 
                 val original =
@@ -143,25 +210,37 @@ class MainActivity : Activity() {
                         BitmapFactory.decodeStream(
                             it, null, decodeOptions
                         )
-                    } ?: throw Exception("Cannot open photo")
+                    } ?: throw Exception("Could not decode photo")
 
                 val enhanced = processImage(original, strength)
 
                 runOnUiThread {
+
                     imageView.setImageBitmap(enhanced)
+
+                    statusText.text =
+                        "Enhancement complete! ($strength)"
+
+                    enhanceButton.isEnabled = true
 
                     Toast.makeText(
                         this,
-                        "Enhancement complete!",
+                        "Your enhanced photo is ready!",
                         Toast.LENGTH_LONG
                     ).show()
                 }
 
             } catch (e: Exception) {
+
                 runOnUiThread {
+                    statusText.text =
+                        "Enhancement failed: ${e.message}"
+
+                    enhanceButton.isEnabled = true
+
                     Toast.makeText(
                         this,
-                        "Enhancement failed: ${e.message}",
+                        "Enhancement failed",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -202,12 +281,24 @@ class MainActivity : Activity() {
                 val index = y * width + x
                 val center = input[index]
 
-                val left = input[y * width + maxOf(0, x - 1)]
-                val right = input[y * width + minOf(width - 1, x + 1)]
-                val top = input[maxOf(0, y - 1) * width + x]
-                val bottom = input[minOf(height - 1, y + 1) * width + x]
+                val left = input[
+                    y * width + maxOf(0, x - 1)
+                ]
+
+                val right = input[
+                    y * width + minOf(width - 1, x + 1)
+                ]
+
+                val top = input[
+                    maxOf(0, y - 1) * width + x
+                ]
+
+                val bottom = input[
+                    minOf(height - 1, y + 1) * width + x
+                ]
 
                 fun enhance(channel: (Int) -> Int): Int {
+
                     val c = channel(center).toFloat()
 
                     val blur = (
@@ -217,15 +308,18 @@ class MainActivity : Activity() {
                         channel(bottom)
                     ) / 4f
 
-                    val sharpened = c + sharpness * (c - blur)
+                    val sharpened =
+                        c + sharpness * (c - blur)
 
                     val adjusted =
                         (sharpened - 128f) * contrast + 128f
 
-                    return adjusted.roundToInt().coerceIn(0, 255)
+                    return adjusted.roundToInt()
+                        .coerceIn(0, 255)
                 }
 
-                output[index] = Color.rgb(
+                output[index] = Color.argb(
+                    Color.alpha(center),
                     enhance { Color.red(it) },
                     enhance { Color.green(it) },
                     enhance { Color.blue(it) }
@@ -234,9 +328,13 @@ class MainActivity : Activity() {
         }
 
         return Bitmap.createBitmap(
-            width, height, Bitmap.Config.ARGB_8888
+            width,
+            height,
+            Bitmap.Config.ARGB_8888
         ).also {
-            it.setPixels(output, 0, width, 0, 0, width, height)
+            it.setPixels(
+                output, 0, width, 0, 0, width, height
+            )
         }
     }
 
@@ -246,11 +344,18 @@ class MainActivity : Activity() {
         resultCode: Int,
         data: Intent?
     ) {
-        super.onActivityResult(requestCode, resultCode, data)
+        super.onActivityResult(
+            requestCode, resultCode, data
+        )
 
         if (requestCode == 100 && resultCode == RESULT_OK) {
+
             selectedImage = data?.data
-            imageView.setImageURI(selectedImage)
+
+            if (selectedImage != null) {
+                imageView.setImageURI(selectedImage)
+                statusText.text = "Original photo loaded"
+            }
         }
     }
 
