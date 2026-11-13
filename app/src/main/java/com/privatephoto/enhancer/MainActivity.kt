@@ -1,5 +1,4 @@
 
-
 package com.privatephoto.enhancer
 
 import android.app.Activity
@@ -30,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var statusText: TextView
     private lateinit var enhanceButton: Button
     private lateinit var saveButton: Button
+    private lateinit var uploadButton: Button
 
     private var selectedStrength = "Balanced"
     private var selectedImage: Uri? = null
@@ -40,6 +40,9 @@ class MainActivity : Activity() {
 
     private val PICK_IMAGE = 100
     private val SAVE_DOCUMENT = 101
+
+    private var isProcessing = false
+    private var isSaving = false
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).roundToInt()
@@ -81,20 +84,23 @@ class MainActivity : Activity() {
             }
         )
 
-        val uploadButton = Button(this).apply {
+        uploadButton = Button(this).apply {
             text = "Upload Picture"
         }
 
         layout.addView(uploadButton)
 
         uploadButton.setOnClickListener {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-    addCategory(Intent.CATEGORY_OPENABLE)
-    type = "image/*"
-    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-}
-            startActivityForResult(intent, PICK_IMAGE)
+            if (!isProcessing && !isSaving) {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/*"
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                }
+
+                startActivityForResult(intent, PICK_IMAGE)
+            }
         }
 
         val label = TextView(this).apply {
@@ -124,8 +130,10 @@ class MainActivity : Activity() {
             layout.addView(button)
 
             button.setOnClickListener {
-                selectedStrength = strength
-                updateStrengthButtons()
+                if (!isProcessing && !isSaving) {
+                    selectedStrength = strength
+                    updateStrengthButtons()
+                }
             }
         }
 
@@ -159,19 +167,22 @@ class MainActivity : Activity() {
                     "Please upload a photo first",
                     Toast.LENGTH_SHORT
                 ).show()
-            } else {
+            } else if (!isProcessing && !isSaving) {
                 enhancePhoto(uri)
             }
         }
 
         saveButton.setOnClickListener {
-            saveEnhancedPhoto()
+            if (!isProcessing && !isSaving) {
+                saveEnhancedPhoto()
+            }
         }
 
         scroll.addView(layout)
         setContentView(scroll)
 
         updateStrengthButtons()
+        statusText.text = "Upload a photo to get started"
     }
 
     private fun updateStrengthButtons() {
@@ -193,16 +204,29 @@ class MainActivity : Activity() {
 
     private fun enhancePhoto(uri: Uri) {
 
+        if (isProcessing || isSaving) return
+
         val strength = selectedStrength
+
+        isProcessing = true
 
         enhanceButton.isEnabled = false
         saveButton.isEnabled = false
+        uploadButton.isEnabled = false
+
+        enhancedBitmap?.let {
+            imageView.setImageDrawable(null)
+            if (!it.isRecycled) it.recycle()
+        }
+
+        enhancedBitmap = null
 
         statusText.text = "Processing your photo..."
 
         executor.execute {
 
             var original: Bitmap? = null
+            var result: Bitmap? = null
 
             try {
 
@@ -215,7 +239,7 @@ class MainActivity : Activity() {
                 } ?: throw Exception("Cannot open photo")
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    throw Exception("Invalid photo")
+                    throw Exception("Invalid or unsupported photo")
                 }
 
                 var sample = 1
@@ -236,23 +260,37 @@ class MainActivity : Activity() {
                     BitmapFactory.decodeStream(it, null, options)
                 } ?: throw Exception("Could not decode photo")
 
-                val enhanced = processImage(original!!, strength)
+                val source = original
+                    ?: throw Exception("Photo decoding failed")
 
-                original?.recycle()
+                result = processImage(source, strength)
+
+                original.recycle()
                 original = null
+
+                val completedBitmap = result
+                    ?: throw Exception("Enhancement produced no image")
 
                 runOnUiThread {
 
-                    enhancedBitmap = enhanced
+                    if (isFinishing || isDestroyed) {
+                        completedBitmap.recycle()
+                        result = null
+                        return@runOnUiThread
+                    }
 
-                    imageView.setImageBitmap(enhancedBitmap)
-                    imageView.visibility = ImageView.VISIBLE
-                    imageView.invalidate()
+                    enhancedBitmap = completedBitmap
+                    result = null
+
+                    imageView.setImageBitmap(completedBitmap)
 
                     statusText.text =
                         "Enhancement complete! ($strength)"
 
+                    isProcessing = false
+
                     enhanceButton.isEnabled = true
+                    uploadButton.isEnabled = true
                     saveButton.isEnabled = true
 
                     Toast.makeText(
@@ -264,14 +302,25 @@ class MainActivity : Activity() {
 
             } catch (e: Exception) {
 
-                original?.recycle()
+                original?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
+
+                result?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
 
                 runOnUiThread {
 
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+
+                    isProcessing = false
+
                     statusText.text =
-                        "Enhancement failed: ${e.message}"
+                        "Enhancement failed: ${e.message ?: "Unknown error"}"
 
                     enhanceButton.isEnabled = true
+                    uploadButton.isEnabled = true
                     saveButton.isEnabled = false
 
                     Toast.makeText(
@@ -288,7 +337,7 @@ class MainActivity : Activity() {
 
         val bitmap = enhancedBitmap
 
-        if (bitmap == null) {
+        if (bitmap == null || bitmap.isRecycled) {
             Toast.makeText(
                 this,
                 "Enhance a photo first",
@@ -297,7 +346,14 @@ class MainActivity : Activity() {
             return
         }
 
+        if (isProcessing || isSaving) return
+
+        isSaving = true
+
         saveButton.isEnabled = false
+        enhanceButton.isEnabled = false
+        uploadButton.isEnabled = false
+
         statusText.text = "Saving enhanced photo..."
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -336,14 +392,18 @@ class MainActivity : Activity() {
                         values
                     ) ?: throw Exception("Could not create photo")
 
-                    val success = contentResolver
-                        .openOutputStream(savedUri!!)?.use {
-                            bitmap.compress(
-                                Bitmap.CompressFormat.JPEG,
-                                95,
-                                it
-                            )
-                        } ?: false
+                    val output = contentResolver.openOutputStream(
+                        savedUri,
+                        "w"
+                    ) ?: throw Exception("Could not open photo output")
+
+                    val success = output.use {
+                        bitmap.compress(
+                            Bitmap.CompressFormat.JPEG,
+                            95,
+                            it
+                        )
+                    }
 
                     if (!success) {
                         throw Exception("Could not write photo")
@@ -357,15 +417,24 @@ class MainActivity : Activity() {
                     }
 
                     contentResolver.update(
-                        savedUri!!,
+                        savedUri,
                         finished,
                         null,
                         null
                     )
 
                     runOnUiThread {
-                        statusText.text = "Photo saved to Gallery!"
+
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+
+                        isSaving = false
+
+                        statusText.text =
+                            "Photo saved to Pictures/Private Photo Enhancer!"
+
                         saveButton.isEnabled = true
+                        enhanceButton.isEnabled = true
+                        uploadButton.isEnabled = true
 
                         Toast.makeText(
                             this,
@@ -381,14 +450,21 @@ class MainActivity : Activity() {
                     }
 
                     runOnUiThread {
+
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+
+                        isSaving = false
+
                         statusText.text =
                             "Save failed: ${e.message}"
 
                         saveButton.isEnabled = true
+                        enhanceButton.isEnabled = true
+                        uploadButton.isEnabled = true
 
                         Toast.makeText(
                             this,
-                            "Could not save photo",
+                            "Could not save photo: ${e.message}",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -397,43 +473,75 @@ class MainActivity : Activity() {
 
         } else {
 
-            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "image/jpeg"
-                putExtra(
-                    Intent.EXTRA_TITLE,
-                    "Enhanced_Photo.jpg"
-                )
-            }
+            try {
 
-            startActivityForResult(intent, SAVE_DOCUMENT)
+                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "image/jpeg"
+                    putExtra(
+                        Intent.EXTRA_TITLE,
+                        "Enhanced_Photo.jpg"
+                    )
+                }
+
+                startActivityForResult(intent, SAVE_DOCUMENT)
+
+            } catch (e: Exception) {
+
+                isSaving = false
+                saveButton.isEnabled = true
+                enhanceButton.isEnabled = true
+                uploadButton.isEnabled = true
+
+                statusText.text = "Save failed: ${e.message}"
+            }
         }
     }
 
     private fun saveBitmapToUri(uri: Uri) {
 
-        val bitmap = enhancedBitmap ?: return
+        val bitmap = enhancedBitmap
+
+        if (bitmap == null || bitmap.isRecycled) {
+            isSaving = false
+            saveButton.isEnabled = false
+            enhanceButton.isEnabled = true
+            uploadButton.isEnabled = true
+            return
+        }
 
         executor.execute {
 
             try {
 
-                val success = contentResolver
-                    .openOutputStream(uri)?.use {
-                        bitmap.compress(
-                            Bitmap.CompressFormat.JPEG,
-                            95,
-                            it
-                        )
-                    } ?: false
+                val output = contentResolver.openOutputStream(
+                    uri,
+                    "w"
+                ) ?: throw Exception("Could not open photo output")
+
+                val success = output.use {
+                    bitmap.compress(
+                        Bitmap.CompressFormat.JPEG,
+                        95,
+                        it
+                    )
+                }
 
                 if (!success) {
                     throw Exception("Could not write photo")
                 }
 
                 runOnUiThread {
+
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+
+                    isSaving = false
+
                     statusText.text = "Photo saved successfully!"
+
                     saveButton.isEnabled = true
+                    enhanceButton.isEnabled = true
+                    uploadButton.isEnabled = true
 
                     Toast.makeText(
                         this,
@@ -445,8 +553,23 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
 
                 runOnUiThread {
-                    statusText.text = "Save failed: ${e.message}"
+
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+
+                    isSaving = false
+
+                    statusText.text =
+                        "Save failed: ${e.message}"
+
                     saveButton.isEnabled = true
+                    enhanceButton.isEnabled = true
+                    uploadButton.isEnabled = true
+
+                    Toast.makeText(
+                        this,
+                        "Could not save photo: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
@@ -478,11 +601,19 @@ class MainActivity : Activity() {
         val width = source.width
         val height = source.height
 
-        val input = IntArray(width * height)
-        val output = IntArray(width * height)
+        val pixelCount = width * height
+
+        val input = IntArray(pixelCount)
+        val output = IntArray(pixelCount)
 
         source.getPixels(
-            input, 0, width, 0, 0, width, height
+            input,
+            0,
+            width,
+            0,
+            0,
+            width,
+            height
         )
 
         for (y in 0 until height) {
@@ -557,9 +688,7 @@ class MainActivity : Activity() {
         }
     }
 
-    
-
-    @Deprecated("Deprecated in Android")
+    @Suppress("DEPRECATION")
     override fun onActivityResult(
         requestCode: Int,
         resultCode: Int,
@@ -567,19 +696,11 @@ class MainActivity : Activity() {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
-        if (resultCode != RESULT_OK) return
-
-        if (requestCode == SAVE_DOCUMENT) {
-            data?.data?.let { uri ->
-                saveBitmapToUri(uri)
-            }
-            return
-        }
-
         if (requestCode == PICK_IMAGE) {
-            selectedImage = data?.data
 
-            val uri = selectedImage ?: return
+            if (resultCode != RESULT_OK) return
+
+            val uri = data?.data ?: return
 
             try {
                 contentResolver.takePersistableUriPermission(
@@ -587,102 +708,66 @@ class MainActivity : Activity() {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (e: Exception) {
-                // Temporary permission is sufficient.
+                // Temporary access may still be available.
+            }
+
+            selectedImage = uri
+
+            enhancedBitmap?.let {
+                imageView.setImageDrawable(null)
+                if (!it.isRecycled) it.recycle()
             }
 
             enhancedBitmap = null
+
             imageView.setImageURI(uri)
+
             saveButton.isEnabled = false
+
             statusText.text = "Original photo loaded"
+
+            return
+        }
+
+        if (requestCode == SAVE_DOCUMENT) {
+
+            if (resultCode == RESULT_OK) {
+
+                val uri = data?.data
+
+                if (uri != null) {
+                    saveBitmapToUri(uri)
+                } else {
+                    isSaving = false
+                    saveButton.isEnabled = true
+                    enhanceButton.isEnabled = true
+                    uploadButton.isEnabled = true
+                    statusText.text = "No save location selected"
+                }
+
+            } else {
+
+                isSaving = false
+                saveButton.isEnabled = true
+                enhanceButton.isEnabled = true
+                uploadButton.isEnabled = true
+
+                statusText.text = "Save cancelled"
+            }
         }
     }
 
     override fun onDestroy() {
+
         executor.shutdownNow()
-        enhancedBitmap?.recycle()
+
+        enhancedBitmap?.let {
+            imageView.setImageDrawable(null)
+            if (!it.isRecycled) it.recycle()
+        }
+
         enhancedBitmap = null
-        super.onDestroy()
-    }
 
-) {
-    super.onActivityResult(requestCode, resultCode, data)
-
-    if (resultCode != RESULT_OK) return
-
-    if (requestCode == SAVE_DOCUMENT) {
-        data?.data?.let {
-            saveBitmapToUri(it)
-        }
-        return
-    }
-
-    if (requestCode == PICK_IMAGE) {
-        selectedImage = data?.data
-
-        selectedImage?.let { uri ->
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (e: Exception) {
-                // Continue with temporary permission.
-            }
-
-            enhancedBitmap = null
-            imageView.setImageURI(uri)
-            saveButton.isEnabled = false
-            statusText.text = "Original photo loaded"
-        }
-    }
-}
-
-    ) {
-        super.onActivityResult(
-            requestCode,
-            resultCode,
-            data
-        )
-
-        if (resultCode != RESULT_OK) return
-
-        if (requestCode == SAVE_DOCUMENT) {
-
-            data?.data?.let {
-                saveBitmapToUri(it)
-            }
-
-            return
-        }
-
-        if (requestCode == PICK_IMAGE) {
-
-            selectedImage = data?.data
-
-selectedImage?.let { uri ->
-    try {
-        contentResolver.takePersistableUriPermission(
-            uri,
-            Intent.FLAG_GRANT_READ_URI_PERMISSION
-        )
-    } catch (e: Exception) {
-        // Temporary access may still be available.
-    }
-
-            if (selectedImage != null) {
-
-                enhancedBitmap = null
-                imageView.setImageURI(selectedImage)
-
-                saveButton.isEnabled = false
-
-                statusText.text = "Original photo loaded"
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        executor.shutdownNow()
         super.onDestroy()
     }
 }
