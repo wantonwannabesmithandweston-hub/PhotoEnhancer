@@ -24,7 +24,8 @@ import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
 
-    private lateinit var imageView: ImageView
+    private lateinit var originalView: ImageView
+    private lateinit var enhancedView: ImageView
     private lateinit var strengthText: TextView
     private lateinit var statusText: TextView
     private lateinit var enhanceButton: Button
@@ -55,7 +56,7 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(dp(20), dp(20), dp(20), dp(20))
+            setPadding(dp(12), dp(20), dp(12), dp(20))
             setBackgroundColor(Color.rgb(20, 20, 20))
         }
 
@@ -65,20 +66,57 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
-
         layout.addView(title)
 
-        imageView = ImageView(this).apply {
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setBackgroundColor(Color.rgb(35, 35, 35))
+        val comparison = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
         }
 
+        fun addImageColumn(label: String): ImageView {
+            val column = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+            }
+
+            val heading = TextView(this).apply {
+                text = label
+                textSize = 17f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+            }
+            column.addView(heading)
+
+            val image = ImageView(this).apply {
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                setBackgroundColor(Color.rgb(35, 35, 35))
+            }
+
+            column.addView(
+                image,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(260)
+                )
+            )
+
+            comparison.addView(
+                column,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            )
+
+            return image
+        }
+
+        originalView = addImageColumn("ORIGINAL")
+        enhancedView = addImageColumn("ENHANCED")
+
         layout.addView(
-            imageView,
+            comparison,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(350)
+                LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(0, dp(20), 0, dp(20))
             }
@@ -87,7 +125,6 @@ class MainActivity : Activity() {
         uploadButton = Button(this).apply {
             text = "Upload Picture"
         }
-
         layout.addView(uploadButton)
 
         uploadButton.setOnClickListener {
@@ -98,7 +135,6 @@ class MainActivity : Activity() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                 }
-
                 startActivityForResult(intent, PICK_IMAGE)
             }
         }
@@ -109,7 +145,6 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
-
         layout.addView(label)
 
         strengthText = TextView(this).apply {
@@ -117,15 +152,12 @@ class MainActivity : Activity() {
             setTextColor(Color.GREEN)
             gravity = Gravity.CENTER
         }
-
         layout.addView(strengthText)
 
         listOf("Low", "Balanced", "High").forEach { strength ->
-
             val button = Button(this).apply {
                 text = strength
             }
-
             strengthButtons[strength] = button
             layout.addView(button)
 
@@ -140,7 +172,6 @@ class MainActivity : Activity() {
         enhanceButton = Button(this).apply {
             text = "Enhance Photo"
         }
-
         layout.addView(enhanceButton)
 
         statusText = TextView(this).apply {
@@ -148,34 +179,25 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
-
         layout.addView(statusText)
 
         saveButton = Button(this).apply {
             text = "Save Enhanced Photo to Gallery"
             isEnabled = false
         }
-
         layout.addView(saveButton)
 
         enhanceButton.setOnClickListener {
             val uri = selectedImage
-
             if (uri == null) {
-                Toast.makeText(
-                    this,
-                    "Please upload a photo first",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(this, "Please upload a photo first", Toast.LENGTH_SHORT).show()
             } else if (!isProcessing && !isSaving) {
                 enhancePhoto(uri)
             }
         }
 
         saveButton.setOnClickListener {
-            if (!isProcessing && !isSaving) {
-                saveEnhancedPhoto()
-            }
+            if (!isProcessing && !isSaving) saveEnhancedPhoto()
         }
 
         scroll.addView(layout)
@@ -186,118 +208,50 @@ class MainActivity : Activity() {
     }
 
     private fun updateStrengthButtons() {
-
         strengthText.text = "Selected: $selectedStrength"
 
         strengthButtons.forEach { (strength, button) ->
-
             val selected = strength == selectedStrength
-
-            button.text =
-                if (selected) "✓ $strength" else strength
-
-            button.setTextColor(
-                if (selected) Color.GREEN else Color.WHITE
-            )
+            button.text = if (selected) "✓ $strength" else strength
+            button.setTextColor(if (selected) Color.GREEN else Color.WHITE)
         }
     }
 
-    // NEW: More reliable photo reading method.
-    // Supports Android document providers and gallery URIs.
-
     private fun readPhotoBytes(uri: Uri): ByteArray {
+        val stream = contentResolver.openInputStream(uri)
+            ?: throw Exception("Cannot open selected photo")
 
-        var firstError: Exception? = null
-
-        try {
-            val descriptor = contentResolver.openAssetFileDescriptor(
-                uri,
-                "r"
-            )
-
-            if (descriptor != null) {
-                descriptor.use {
-                    return it.createInputStream().use { stream ->
-                        stream.readBytes()
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            firstError = e
-        }
-
-        try {
-            val stream = contentResolver.openInputStream(uri)
-                ?: throw Exception("Photo provider returned no stream")
-
-            return stream.use {
-                it.readBytes()
-            }
-
-        } catch (e: Exception) {
-            throw Exception(
-                "Cannot read selected photo. " +
-                    (e.message ?: firstError?.message ?: "Access denied")
-            )
-        }
+        return stream.use { it.readBytes() }
     }
 
     private fun enhancePhoto(uri: Uri) {
-
         if (isProcessing || isSaving) return
 
-        val strength = selectedStrength
-
         isProcessing = true
+        val strength = selectedStrength
 
         enhanceButton.isEnabled = false
         saveButton.isEnabled = false
         uploadButton.isEnabled = false
-
-        enhancedBitmap?.let {
-            imageView.setImageDrawable(null)
-            if (!it.isRecycled) it.recycle()
-        }
-
-        enhancedBitmap = null
-
-        statusText.text = "Processing your photo..."
+        statusText.text = "Enhancing photo..."
 
         executor.execute {
-
-            var original: Bitmap? = null
             var result: Bitmap? = null
 
             try {
-
-                // Read the photo once instead of repeatedly
-                // requesting streams from the photo provider.
-
-                val photoBytes = readPhotoBytes(uri)
-
-                if (photoBytes.isEmpty()) {
-                    throw Exception("Selected photo is empty")
-                }
+                val bytes = readPhotoBytes(uri)
 
                 val bounds = BitmapFactory.Options().apply {
                     inJustDecodeBounds = true
                 }
 
-                BitmapFactory.decodeByteArray(
-                    photoBytes,
-                    0,
-                    photoBytes.size,
-                    bounds
-                )
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    throw Exception(
-                        "Invalid or unsupported photo format"
-                    )
+                    throw Exception("Unsupported or invalid image")
                 }
 
                 var sample = 1
-
                 while (
                     bounds.outWidth / sample > 1600 ||
                     bounds.outHeight / sample > 1600
@@ -310,140 +264,196 @@ class MainActivity : Activity() {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
 
-                original = BitmapFactory.decodeByteArray(
-                    photoBytes,
-                    0,
-                    photoBytes.size,
-                    options
-                ) ?: throw Exception(
-                    "Could not decode photo"
-                )
+                val source = BitmapFactory.decodeByteArray(
+                    bytes, 0, bytes.size, options
+                ) ?: throw Exception("Could not decode photo")
 
-                val source = original
-                    ?: throw Exception("Photo decoding failed")
+                try {
+                    result = processImage(source, strength)
+                } finally {
+                    source.recycle()
+                }
 
-                result = processImage(source, strength)
-
-                original.recycle()
-                original = null
-
-                val completedBitmap = result
-                    ?: throw Exception("Enhancement produced no image")
+                val completed = result ?: throw Exception("No enhanced image produced")
 
                 runOnUiThread {
-
                     if (isFinishing || isDestroyed) {
-                        completedBitmap.recycle()
-                        result = null
+                        completed.recycle()
                         return@runOnUiThread
                     }
 
-                    enhancedBitmap = completedBitmap
-                    result = null
+                    enhancedBitmap?.let {
+                        if (!it.isRecycled) it.recycle()
+                    }
 
-                    imageView.setImageBitmap(completedBitmap)
+                    enhancedBitmap = completed
+                    enhancedView.setImageBitmap(completed)
 
-                    statusText.text =
-                        "Enhancement complete! ($strength)"
+                    statusText.text = "Enhancement complete! ($strength)"
 
                     isProcessing = false
-
                     enhanceButton.isEnabled = true
                     uploadButton.isEnabled = true
                     saveButton.isEnabled = true
 
                     Toast.makeText(
                         this,
-                        "Enhanced photo is ready! You can now save it.",
-                        Toast.LENGTH_LONG
+                        "Enhanced photo is ready!",
+                        Toast.LENGTH_SHORT
                     ).show()
                 }
 
+                result = null
+
             } catch (e: Exception) {
-
-                original?.let {
-                    if (!it.isRecycled) it.recycle()
-                }
-
-                result?.let {
-                    if (!it.isRecycled) it.recycle()
-                }
+                result?.let { if (!it.isRecycled) it.recycle() }
 
                 runOnUiThread {
-
                     if (isFinishing || isDestroyed) return@runOnUiThread
 
                     isProcessing = false
-
-                    statusText.text =
-                        "Enhancement failed: ${e.message ?: "Unknown error"}"
-
+                    statusText.text = "Enhancement failed: ${e.message}"
                     enhanceButton.isEnabled = true
                     uploadButton.isEnabled = true
                     saveButton.isEnabled = false
-
-                    Toast.makeText(
-                        this,
-                        "Enhancement failed: ${e.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
                 }
             }
         }
     }
 
-    private fun saveEnhancedPhoto() {
+    // Local image enhancement using color correction and
+    // a 3x3 unsharp-mask sharpening filter.
 
+    private fun processImage(source: Bitmap, strength: String): Bitmap {
+        val contrast = when (strength) {
+            "Low" -> 1.10f
+            "High" -> 1.30f
+            else -> 1.20f
+        }
+
+        val sharpness = when (strength) {
+            "Low" -> 0.55f
+            "High" -> 1.20f
+            else -> 0.85f
+        }
+
+        val brightness = when (strength) {
+            "Low" -> 2f
+            "High" -> 7f
+            else -> 4f
+        }
+
+        val saturation = when (strength) {
+            "Low" -> 1.04f
+            "High" -> 1.15f
+            else -> 1.09f
+        }
+
+        val width = source.width
+        val height = source.height
+
+        val input = IntArray(width * height)
+        val output = IntArray(width * height)
+
+        source.getPixels(input, 0, width, 0, 0, width, height)
+
+        fun channel(pixel: Int, shift: Int): Int =
+            (pixel shr shift) and 255
+
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val index = y * width + x
+                val center = input[index]
+
+                val r = channel(center, 16).toFloat()
+                val g = channel(center, 8).toFloat()
+                val b = channel(center, 0).toFloat()
+
+                // Average the surrounding 8 pixels.
+                var sumR = 0f
+                var sumG = 0f
+                var sumB = 0f
+                var count = 0
+
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        if (dx == 0 && dy == 0) continue
+
+                        val nx = (x + dx).coerceIn(0, width - 1)
+                        val ny = (y + dy).coerceIn(0, height - 1)
+                        val neighbor = input[ny * width + nx]
+
+                        sumR += channel(neighbor, 16)
+                        sumG += channel(neighbor, 8)
+                        sumB += channel(neighbor, 0)
+                        count++
+                    }
+                }
+
+                val blurR = sumR / count
+                val blurG = sumG / count
+                val blurB = sumB / count
+
+                fun adjust(value: Float, blur: Float): Float {
+                    val sharpened = value + sharpness * (value - blur)
+                    return ((sharpened - 128f) * contrast + 128f + brightness)
+                        .coerceIn(0f, 255f)
+                }
+
+                var nr = adjust(r, blurR)
+                var ng = adjust(g, blurG)
+                var nb = adjust(b, blurB)
+
+                val gray = 0.299f * nr + 0.587f * ng + 0.114f * nb
+
+                nr = (gray + (nr - gray) * saturation).coerceIn(0f, 255f)
+                ng = (gray + (ng - gray) * saturation).coerceIn(0f, 255f)
+                nb = (gray + (nb - gray) * saturation).coerceIn(0f, 255f)
+
+                output[index] = Color.argb(
+                    Color.alpha(center),
+                    nr.roundToInt(),
+                    ng.roundToInt(),
+                    nb.roundToInt()
+                )
+            }
+        }
+
+        return Bitmap.createBitmap(
+            width, height, Bitmap.Config.ARGB_8888
+        ).also {
+            it.setPixels(output, 0, width, 0, 0, width, height)
+        }
+    }
+
+    private fun saveEnhancedPhoto() {
         val bitmap = enhancedBitmap
 
         if (bitmap == null || bitmap.isRecycled) {
-            Toast.makeText(
-                this,
-                "Enhance a photo first",
-                Toast.LENGTH_SHORT
-            ).show()
+            Toast.makeText(this, "Enhance a photo first", Toast.LENGTH_SHORT).show()
             return
         }
 
         if (isProcessing || isSaving) return
 
         isSaving = true
-
         saveButton.isEnabled = false
         enhanceButton.isEnabled = false
         uploadButton.isEnabled = false
-
         statusText.text = "Saving enhanced photo..."
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-
             executor.execute {
-
                 var savedUri: Uri? = null
 
                 try {
-
-                    val filename =
-                        "Enhanced_${System.currentTimeMillis()}.jpg"
-
                     val values = ContentValues().apply {
-                        put(
-                            MediaStore.Images.Media.DISPLAY_NAME,
-                            filename
-                        )
-                        put(
-                            MediaStore.Images.Media.MIME_TYPE,
-                            "image/jpeg"
-                        )
-                        put(
-                            MediaStore.Images.Media.RELATIVE_PATH,
-                            Environment.DIRECTORY_PICTURES +
-                                "/Private Photo Enhancer"
-                        )
-                        put(
-                            MediaStore.Images.Media.IS_PENDING,
-                            1
-                        )
+                        put(MediaStore.Images.Media.DISPLAY_NAME,
+                            "Enhanced_${System.currentTimeMillis()}.jpg")
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        put(MediaStore.Images.Media.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES + "/Private Photo Enhancer")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
 
                     savedUri = contentResolver.insert(
@@ -451,114 +461,55 @@ class MainActivity : Activity() {
                         values
                     ) ?: throw Exception("Could not create photo")
 
-                    val output = contentResolver.openOutputStream(
-                        savedUri,
-                        "w"
-                    ) ?: throw Exception("Could not open photo output")
+                    val output = contentResolver.openOutputStream(savedUri, "w")
+                        ?: throw Exception("Could not open output")
 
                     val success = output.use {
-                        bitmap.compress(
-                            Bitmap.CompressFormat.JPEG,
-                            95,
-                            it
-                        )
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
                     }
 
-                    if (!success) {
-                        throw Exception("Could not write photo")
-                    }
+                    if (!success) throw Exception("Could not write photo")
 
                     val finished = ContentValues().apply {
-                        put(
-                            MediaStore.Images.Media.IS_PENDING,
-                            0
-                        )
+                        put(MediaStore.Images.Media.IS_PENDING, 0)
                     }
 
-                    contentResolver.update(
-                        savedUri,
-                        finished,
-                        null,
-                        null
-                    )
+                    contentResolver.update(savedUri, finished, null, null)
 
                     runOnUiThread {
-
                         if (isFinishing || isDestroyed) return@runOnUiThread
-
                         isSaving = false
-
-                        statusText.text =
-                            "Photo saved to Pictures/Private Photo Enhancer!"
-
+                        statusText.text = "Photo saved to your gallery!"
                         saveButton.isEnabled = true
                         enhanceButton.isEnabled = true
                         uploadButton.isEnabled = true
-
-                        Toast.makeText(
-                            this,
-                            "Photo saved successfully!",
-                            Toast.LENGTH_LONG
-                        ).show()
+                        Toast.makeText(this, "Photo saved successfully!", Toast.LENGTH_LONG).show()
                     }
 
                 } catch (e: Exception) {
-
-                    savedUri?.let {
-                        contentResolver.delete(it, null, null)
-                    }
+                    savedUri?.let { contentResolver.delete(it, null, null) }
 
                     runOnUiThread {
-
                         if (isFinishing || isDestroyed) return@runOnUiThread
-
                         isSaving = false
-
-                        statusText.text =
-                            "Save failed: ${e.message}"
-
+                        statusText.text = "Save failed: ${e.message}"
                         saveButton.isEnabled = true
                         enhanceButton.isEnabled = true
                         uploadButton.isEnabled = true
-
-                        Toast.makeText(
-                            this,
-                            "Could not save photo: ${e.message}",
-                            Toast.LENGTH_LONG
-                        ).show()
                     }
                 }
             }
-
         } else {
-
-            try {
-
-                val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "image/jpeg"
-                    putExtra(
-                        Intent.EXTRA_TITLE,
-                        "Enhanced_Photo.jpg"
-                    )
-                }
-
-                startActivityForResult(intent, SAVE_DOCUMENT)
-
-            } catch (e: Exception) {
-
-                isSaving = false
-                saveButton.isEnabled = true
-                enhanceButton.isEnabled = true
-                uploadButton.isEnabled = true
-
-                statusText.text = "Save failed: ${e.message}"
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "image/jpeg"
+                putExtra(Intent.EXTRA_TITLE, "Enhanced_Photo.jpg")
             }
+            startActivityForResult(intent, SAVE_DOCUMENT)
         }
     }
 
     private fun saveBitmapToUri(uri: Uri) {
-
         val bitmap = enhancedBitmap
 
         if (bitmap == null || bitmap.isRecycled) {
@@ -570,180 +521,35 @@ class MainActivity : Activity() {
         }
 
         executor.execute {
-
             try {
-
-                val output = contentResolver.openOutputStream(
-                    uri,
-                    "w"
-                ) ?: throw Exception("Could not open photo output")
+                val output = contentResolver.openOutputStream(uri, "w")
+                    ?: throw Exception("Could not open output")
 
                 val success = output.use {
-                    bitmap.compress(
-                        Bitmap.CompressFormat.JPEG,
-                        95,
-                        it
-                    )
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
                 }
 
-                if (!success) {
-                    throw Exception("Could not write photo")
-                }
+                if (!success) throw Exception("Could not write photo")
 
                 runOnUiThread {
-
                     if (isFinishing || isDestroyed) return@runOnUiThread
-
                     isSaving = false
-
                     statusText.text = "Photo saved successfully!"
-
                     saveButton.isEnabled = true
                     enhanceButton.isEnabled = true
                     uploadButton.isEnabled = true
-
-                    Toast.makeText(
-                        this,
-                        "Enhanced photo saved!",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Enhanced photo saved!", Toast.LENGTH_LONG).show()
                 }
-
             } catch (e: Exception) {
-
                 runOnUiThread {
-
                     if (isFinishing || isDestroyed) return@runOnUiThread
-
                     isSaving = false
-
-                    statusText.text =
-                        "Save failed: ${e.message}"
-
+                    statusText.text = "Save failed: ${e.message}"
                     saveButton.isEnabled = true
                     enhanceButton.isEnabled = true
                     uploadButton.isEnabled = true
-
-                    Toast.makeText(
-                        this,
-                        "Could not save photo: ${e.message}",
-                        Toast.LENGTH_LONG
-                    ).show()
                 }
             }
-        }
-    }
-
-    private fun processImage(
-        source: Bitmap,
-        strength: String
-    ): Bitmap {
-
-        val contrast = when (strength) {
-            "Low" -> 1.08f
-            "High" -> 1.25f
-            else -> 1.15f
-        }
-
-        val sharpness = when (strength) {
-            "Low" -> 0.20f
-            "High" -> 0.70f
-            else -> 0.40f
-        }
-
-        val brightness = when (strength) {
-            "Low" -> 3f
-            "High" -> 9f
-            else -> 6f
-        }
-
-        val width = source.width
-        val height = source.height
-
-        val pixelCount = width * height
-
-        val input = IntArray(pixelCount)
-        val output = IntArray(pixelCount)
-
-        source.getPixels(
-            input,
-            0,
-            width,
-            0,
-            0,
-            width,
-            height
-        )
-
-        for (y in 0 until height) {
-
-            for (x in 0 until width) {
-
-                val index = y * width + x
-                val center = input[index]
-
-                val left = input[
-                    y * width + maxOf(0, x - 1)
-                ]
-
-                val right = input[
-                    y * width + minOf(width - 1, x + 1)
-                ]
-
-                val top = input[
-                    maxOf(0, y - 1) * width + x
-                ]
-
-                val bottom = input[
-                    minOf(height - 1, y + 1) * width + x
-                ]
-
-                fun enhance(channel: (Int) -> Int): Int {
-
-                    val c = channel(center).toFloat()
-
-                    val blur = (
-                        channel(left) +
-                        channel(right) +
-                        channel(top) +
-                        channel(bottom)
-                    ) / 4f
-
-                    val sharpened =
-                        c + sharpness * (c - blur)
-
-                    val adjusted =
-                        (sharpened - 128f) * contrast +
-                        128f + brightness
-
-                    return adjusted.roundToInt()
-                        .coerceIn(0, 255)
-                }
-
-                output[index] = Color.argb(
-                    Color.alpha(center),
-                    enhance { Color.red(it) },
-                    enhance { Color.green(it) },
-                    enhance { Color.blue(it) }
-                )
-            }
-        }
-
-        return Bitmap.createBitmap(
-            width,
-            height,
-            Bitmap.Config.ARGB_8888
-        ).also {
-
-            it.setPixels(
-                output,
-                0,
-                width,
-                0,
-                0,
-                width,
-                height
-            )
         }
     }
 
@@ -755,48 +561,33 @@ class MainActivity : Activity() {
     ) {
         super.onActivityResult(requestCode, resultCode, data)
 
-        if (requestCode == PICK_IMAGE) {
-
-            if (resultCode != RESULT_OK) return
-
+        if (requestCode == PICK_IMAGE && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
 
             try {
-                val permissionFlags = data.flags and
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    permissionFlags
-                )
-            } catch (e: Exception) {
-                // Temporary access may still be available.
+                val flags = data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+                contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (_: Exception) {
             }
 
             selectedImage = uri
 
             enhancedBitmap?.let {
-                imageView.setImageDrawable(null)
                 if (!it.isRecycled) it.recycle()
             }
-
             enhancedBitmap = null
 
-            imageView.setImageURI(uri)
+            enhancedView.setImageDrawable(null)
+            originalView.setImageURI(uri)
 
             saveButton.isEnabled = false
-
-            statusText.text = "Original photo loaded"
-
+            statusText.text = "Original photo loaded. Ready to enhance!"
             return
         }
 
         if (requestCode == SAVE_DOCUMENT) {
-
             if (resultCode == RESULT_OK) {
-
                 val uri = data?.data
-
                 if (uri != null) {
                     saveBitmapToUri(uri)
                 } else {
@@ -806,28 +597,22 @@ class MainActivity : Activity() {
                     uploadButton.isEnabled = true
                     statusText.text = "No save location selected"
                 }
-
             } else {
-
                 isSaving = false
                 saveButton.isEnabled = true
                 enhanceButton.isEnabled = true
                 uploadButton.isEnabled = true
-
                 statusText.text = "Save cancelled"
             }
         }
     }
 
     override fun onDestroy() {
-
         executor.shutdownNow()
 
         enhancedBitmap?.let {
-            imageView.setImageDrawable(null)
             if (!it.isRecycled) it.recycle()
         }
-
         enhancedBitmap = null
 
         super.onDestroy()
