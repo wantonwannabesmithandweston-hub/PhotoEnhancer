@@ -25,3 +25,8 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    implementation("com.google.android.gms:play-services-litert:17.0.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+}
