@@ -8,11 +8,16 @@ import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.GestureDetector
+import android.view.ScaleGestureDetector
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -24,8 +29,8 @@ import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
 
-    private lateinit var originalView: ImageView
-    private lateinit var enhancedView: ImageView
+    private lateinit var originalView: ZoomableImageView
+    private lateinit var enhancedView: ZoomableImageView
     private lateinit var strengthText: TextView
     private lateinit var statusText: TextView
     private lateinit var enhanceButton: Button
@@ -68,12 +73,20 @@ class MainActivity : Activity() {
         }
         layout.addView(title)
 
+        val hint = TextView(this).apply {
+            text = "Pinch to zoom • Drag to inspect • Double-tap to zoom"
+            textSize = 13f
+            setTextColor(Color.LTGRAY)
+            gravity = Gravity.CENTER
+        }
+        layout.addView(hint)
+
         val comparison = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
 
-        fun addImageColumn(label: String): ImageView {
+        fun addImageColumn(label: String): ZoomableImageView {
             val column = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
@@ -87,9 +100,7 @@ class MainActivity : Activity() {
             }
             column.addView(heading)
 
-            val image = ImageView(this).apply {
-                adjustViewBounds = true
-                scaleType = ImageView.ScaleType.FIT_CENTER
+            val image = ZoomableImageView(this).apply {
                 setBackgroundColor(Color.rgb(35, 35, 35))
             }
 
@@ -101,9 +112,23 @@ class MainActivity : Activity() {
                 )
             )
 
+            val resetButton = Button(this).apply {
+                text = "Reset Zoom"
+                textSize = 12f
+            }
+            column.addView(resetButton)
+
+            resetButton.setOnClickListener {
+                image.resetZoom()
+            }
+
             comparison.addView(
                 column,
-                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                LinearLayout.LayoutParams(
+                    0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    1f
+                )
             )
 
             return image
@@ -158,6 +183,7 @@ class MainActivity : Activity() {
             val button = Button(this).apply {
                 text = strength
             }
+
             strengthButtons[strength] = button
             layout.addView(button)
 
@@ -189,15 +215,22 @@ class MainActivity : Activity() {
 
         enhanceButton.setOnClickListener {
             val uri = selectedImage
+
             if (uri == null) {
-                Toast.makeText(this, "Please upload a photo first", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    this,
+                    "Please upload a photo first",
+                    Toast.LENGTH_SHORT
+                ).show()
             } else if (!isProcessing && !isSaving) {
                 enhancePhoto(uri)
             }
         }
 
         saveButton.setOnClickListener {
-            if (!isProcessing && !isSaving) saveEnhancedPhoto()
+            if (!isProcessing && !isSaving) {
+                saveEnhancedPhoto()
+            }
         }
 
         scroll.addView(layout)
@@ -213,7 +246,9 @@ class MainActivity : Activity() {
         strengthButtons.forEach { (strength, button) ->
             val selected = strength == selectedStrength
             button.text = if (selected) "✓ $strength" else strength
-            button.setTextColor(if (selected) Color.GREEN else Color.WHITE)
+            button.setTextColor(
+                if (selected) Color.GREEN else Color.WHITE
+            )
         }
     }
 
@@ -245,13 +280,16 @@ class MainActivity : Activity() {
                     inJustDecodeBounds = true
                 }
 
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                BitmapFactory.decodeByteArray(
+                    bytes, 0, bytes.size, bounds
+                )
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
                     throw Exception("Unsupported or invalid image")
                 }
 
                 var sample = 1
+
                 while (
                     bounds.outWidth / sample > 1600 ||
                     bounds.outHeight / sample > 1600
@@ -274,7 +312,8 @@ class MainActivity : Activity() {
                     source.recycle()
                 }
 
-                val completed = result ?: throw Exception("No enhanced image produced")
+                val completed = result
+                    ?: throw Exception("No enhanced image produced")
 
                 runOnUiThread {
                     if (isFinishing || isDestroyed) {
@@ -288,8 +327,10 @@ class MainActivity : Activity() {
 
                     enhancedBitmap = completed
                     enhancedView.setImageBitmap(completed)
+                    enhancedView.resetZoom()
 
-                    statusText.text = "Enhancement complete! ($strength)"
+                    statusText.text =
+                        "Enhancement complete! ($strength)"
 
                     isProcessing = false
                     enhanceButton.isEnabled = true
@@ -306,13 +347,17 @@ class MainActivity : Activity() {
                 result = null
 
             } catch (e: Exception) {
-                result?.let { if (!it.isRecycled) it.recycle() }
+                result?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
 
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
 
                     isProcessing = false
-                    statusText.text = "Enhancement failed: ${e.message}"
+                    statusText.text =
+                        "Enhancement failed: ${e.message}"
+
                     enhanceButton.isEnabled = true
                     uploadButton.isEnabled = true
                     saveButton.isEnabled = false
@@ -321,10 +366,11 @@ class MainActivity : Activity() {
         }
     }
 
-    // Local image enhancement using color correction and
-    // a 3x3 unsharp-mask sharpening filter.
+    private fun processImage(
+        source: Bitmap,
+        strength: String
+    ): Bitmap {
 
-    private fun processImage(source: Bitmap, strength: String): Bitmap {
         val contrast = when (strength) {
             "Low" -> 1.10f
             "High" -> 1.30f
@@ -362,6 +408,7 @@ class MainActivity : Activity() {
 
         for (y in 0 until height) {
             for (x in 0 until width) {
+
                 val index = y * width + x
                 val center = input[index]
 
@@ -369,7 +416,6 @@ class MainActivity : Activity() {
                 val g = channel(center, 8).toFloat()
                 val b = channel(center, 0).toFloat()
 
-                // Average the surrounding 8 pixels.
                 var sumR = 0f
                 var sumG = 0f
                 var sumB = 0f
@@ -381,6 +427,7 @@ class MainActivity : Activity() {
 
                         val nx = (x + dx).coerceIn(0, width - 1)
                         val ny = (y + dy).coerceIn(0, height - 1)
+
                         val neighbor = input[ny * width + nx]
 
                         sumR += channel(neighbor, 16)
@@ -395,20 +442,35 @@ class MainActivity : Activity() {
                 val blurB = sumB / count
 
                 fun adjust(value: Float, blur: Float): Float {
-                    val sharpened = value + sharpness * (value - blur)
-                    return ((sharpened - 128f) * contrast + 128f + brightness)
-                        .coerceIn(0f, 255f)
+                    val sharpened =
+                        value + sharpness * (value - blur)
+
+                    return (
+                        (sharpened - 128f) * contrast +
+                            128f + brightness
+                    ).coerceIn(0f, 255f)
                 }
 
                 var nr = adjust(r, blurR)
                 var ng = adjust(g, blurG)
                 var nb = adjust(b, blurB)
 
-                val gray = 0.299f * nr + 0.587f * ng + 0.114f * nb
+                val gray =
+                    0.299f * nr +
+                    0.587f * ng +
+                    0.114f * nb
 
-                nr = (gray + (nr - gray) * saturation).coerceIn(0f, 255f)
-                ng = (gray + (ng - gray) * saturation).coerceIn(0f, 255f)
-                nb = (gray + (nb - gray) * saturation).coerceIn(0f, 255f)
+                nr = (
+                    gray + (nr - gray) * saturation
+                ).coerceIn(0f, 255f)
+
+                ng = (
+                    gray + (ng - gray) * saturation
+                ).coerceIn(0f, 255f)
+
+                nb = (
+                    gray + (nb - gray) * saturation
+                ).coerceIn(0f, 255f)
 
                 output[index] = Color.argb(
                     Color.alpha(center),
@@ -420,7 +482,9 @@ class MainActivity : Activity() {
         }
 
         return Bitmap.createBitmap(
-            width, height, Bitmap.Config.ARGB_8888
+            width,
+            height,
+            Bitmap.Config.ARGB_8888
         ).also {
             it.setPixels(output, 0, width, 0, 0, width, height)
         }
@@ -430,7 +494,11 @@ class MainActivity : Activity() {
         val bitmap = enhancedBitmap
 
         if (bitmap == null || bitmap.isRecycled) {
-            Toast.makeText(this, "Enhance a photo first", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                "Enhance a photo first",
+                Toast.LENGTH_SHORT
+            ).show()
             return
         }
 
@@ -448,11 +516,19 @@ class MainActivity : Activity() {
 
                 try {
                     val values = ContentValues().apply {
-                        put(MediaStore.Images.Media.DISPLAY_NAME,
-                            "Enhanced_${System.currentTimeMillis()}.jpg")
-                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                        put(MediaStore.Images.Media.RELATIVE_PATH,
-                            Environment.DIRECTORY_PICTURES + "/Private Photo Enhancer")
+                        put(
+                            MediaStore.Images.Media.DISPLAY_NAME,
+                            "Enhanced_${System.currentTimeMillis()}.jpg"
+                        )
+                        put(
+                            MediaStore.Images.Media.MIME_TYPE,
+                            "image/jpeg"
+                        )
+                        put(
+                            MediaStore.Images.Media.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES +
+                                "/Private Photo Enhancer"
+                        )
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
 
@@ -461,36 +537,54 @@ class MainActivity : Activity() {
                         values
                     ) ?: throw Exception("Could not create photo")
 
-                    val output = contentResolver.openOutputStream(savedUri, "w")
-                        ?: throw Exception("Could not open output")
+                    val output = contentResolver.openOutputStream(
+                        savedUri, "w"
+                    ) ?: throw Exception("Could not open output")
 
                     val success = output.use {
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
+                        bitmap.compress(
+                            Bitmap.CompressFormat.JPEG, 95, it
+                        )
                     }
 
-                    if (!success) throw Exception("Could not write photo")
+                    if (!success) {
+                        throw Exception("Could not write photo")
+                    }
 
                     val finished = ContentValues().apply {
                         put(MediaStore.Images.Media.IS_PENDING, 0)
                     }
 
-                    contentResolver.update(savedUri, finished, null, null)
+                    contentResolver.update(
+                        savedUri, finished, null, null
+                    )
 
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
+
                         isSaving = false
-                        statusText.text = "Photo saved to your gallery!"
+                        statusText.text =
+                            "Photo saved to your gallery!"
+
                         saveButton.isEnabled = true
                         enhanceButton.isEnabled = true
                         uploadButton.isEnabled = true
-                        Toast.makeText(this, "Photo saved successfully!", Toast.LENGTH_LONG).show()
+
+                        Toast.makeText(
+                            this,
+                            "Photo saved successfully!",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
 
                 } catch (e: Exception) {
-                    savedUri?.let { contentResolver.delete(it, null, null) }
+                    savedUri?.let {
+                        contentResolver.delete(it, null, null)
+                    }
 
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
+
                         isSaving = false
                         statusText.text = "Save failed: ${e.message}"
                         saveButton.isEnabled = true
@@ -505,6 +599,7 @@ class MainActivity : Activity() {
                 type = "image/jpeg"
                 putExtra(Intent.EXTRA_TITLE, "Enhanced_Photo.jpg")
             }
+
             startActivityForResult(intent, SAVE_DOCUMENT)
         }
     }
@@ -522,27 +617,40 @@ class MainActivity : Activity() {
 
         executor.execute {
             try {
-                val output = contentResolver.openOutputStream(uri, "w")
-                    ?: throw Exception("Could not open output")
+                val output = contentResolver.openOutputStream(
+                    uri, "w"
+                ) ?: throw Exception("Could not open output")
 
                 val success = output.use {
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it)
+                    bitmap.compress(
+                        Bitmap.CompressFormat.JPEG, 95, it
+                    )
                 }
 
-                if (!success) throw Exception("Could not write photo")
+                if (!success) {
+                    throw Exception("Could not write photo")
+                }
 
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
+
                     isSaving = false
                     statusText.text = "Photo saved successfully!"
                     saveButton.isEnabled = true
                     enhanceButton.isEnabled = true
                     uploadButton.isEnabled = true
-                    Toast.makeText(this, "Enhanced photo saved!", Toast.LENGTH_LONG).show()
+
+                    Toast.makeText(
+                        this,
+                        "Enhanced photo saved!",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
+
             } catch (e: Exception) {
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
+
                     isSaving = false
                     statusText.text = "Save failed: ${e.message}"
                     saveButton.isEnabled = true
@@ -565,7 +673,9 @@ class MainActivity : Activity() {
             val uri = data?.data ?: return
 
             try {
-                val flags = data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+                val flags =
+                    data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+
                 contentResolver.takePersistableUriPermission(uri, flags)
             } catch (_: Exception) {
             }
@@ -575,19 +685,26 @@ class MainActivity : Activity() {
             enhancedBitmap?.let {
                 if (!it.isRecycled) it.recycle()
             }
+
             enhancedBitmap = null
 
             enhancedView.setImageDrawable(null)
+            enhancedView.resetZoom()
+
             originalView.setImageURI(uri)
+            originalView.resetZoom()
 
             saveButton.isEnabled = false
-            statusText.text = "Original photo loaded. Ready to enhance!"
+            statusText.text =
+                "Original photo loaded. Ready to enhance!"
+
             return
         }
 
         if (requestCode == SAVE_DOCUMENT) {
             if (resultCode == RESULT_OK) {
                 val uri = data?.data
+
                 if (uri != null) {
                     saveBitmapToUri(uri)
                 } else {
@@ -613,8 +730,244 @@ class MainActivity : Activity() {
         enhancedBitmap?.let {
             if (!it.isRecycled) it.recycle()
         }
-        enhancedBitmap = null
 
+        enhancedBitmap = null
         super.onDestroy()
+    }
+}
+
+
+// ============================================
+// ZOOMABLE IMAGE VIEW
+// ============================================
+
+class ZoomableImageView(
+    context: android.content.Context
+) : ImageView(context) {
+
+    private val imageMatrixValues = FloatArray(9)
+    private val displayMatrix = Matrix()
+
+    private var currentScale = 1f
+    private var lastX = 0f
+    private var lastY = 0f
+    private var scaling = false
+
+    private val maximumZoom = 6f
+
+    private val scaleDetector =
+        ScaleGestureDetector(
+            context,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+
+                override fun onScaleBegin(
+                    detector: ScaleGestureDetector
+                ): Boolean {
+                    scaling = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    return true
+                }
+
+                override fun onScale(
+                    detector: ScaleGestureDetector
+                ): Boolean {
+                    val factor = detector.scaleFactor
+
+                    val newScale =
+                        (currentScale * factor).coerceIn(1f, maximumZoom)
+
+                    val actualFactor = newScale / currentScale
+
+                    displayMatrix.postScale(
+                        actualFactor,
+                        actualFactor,
+                        detector.focusX,
+                        detector.focusY
+                    )
+
+                    currentScale = newScale
+
+                    limitMovement()
+                    imageMatrix = displayMatrix
+
+                    return true
+                }
+
+                override fun onScaleEnd(
+                    detector: ScaleGestureDetector
+                ) {
+                    scaling = false
+                }
+            }
+        )
+
+    private val gestureDetector =
+        GestureDetector(
+            context,
+            object : GestureDetector.SimpleOnGestureListener() {
+
+                override fun onDown(e: MotionEvent): Boolean {
+                    return true
+                }
+
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                    if (currentScale > 1.1f) {
+                        resetZoom()
+                    } else {
+                        val factor = 2.5f
+
+                        displayMatrix.postScale(
+                            factor,
+                            factor,
+                            e.x,
+                            e.y
+                        )
+
+                        currentScale = factor
+                        limitMovement()
+                        imageMatrix = displayMatrix
+                    }
+
+                    return true
+                }
+            }
+        )
+
+    init {
+        scaleType = ScaleType.MATRIX
+        adjustViewBounds = false
+        isClickable = true
+    }
+
+    fun resetZoom() {
+        currentScale = 1f
+        scaling = false
+        fitImage()
+    }
+
+    private fun fitImage() {
+        val drawable = drawable ?: return
+
+        val imageWidth = drawable.intrinsicWidth.toFloat()
+        val imageHeight = drawable.intrinsicHeight.toFloat()
+
+        if (
+            imageWidth <= 0f ||
+            imageHeight <= 0f ||
+            width <= 0 ||
+            height <= 0
+        ) return
+
+        val fitScale = minOf(
+            width.toFloat() / imageWidth,
+            height.toFloat() / imageHeight
+        )
+
+        val left = (width - imageWidth * fitScale) / 2f
+        val top = (height - imageHeight * fitScale) / 2f
+
+        displayMatrix.reset()
+        displayMatrix.setScale(fitScale, fitScale)
+        displayMatrix.postTranslate(left, top)
+
+        currentScale = 1f
+        imageMatrix = displayMatrix
+    }
+
+    private fun limitMovement() {
+        val drawable = drawable ?: return
+
+        val rect = RectF(
+            0f,
+            0f,
+            drawable.intrinsicWidth.toFloat(),
+            drawable.intrinsicHeight.toFloat()
+        )
+
+        displayMatrix.mapRect(rect)
+
+        var dx = 0f
+        var dy = 0f
+
+        if (rect.width() <= width) {
+            dx = (width - rect.width()) / 2f - rect.left
+        } else if (rect.left > 0f) {
+            dx = -rect.left
+        } else if (rect.right < width) {
+            dx = width - rect.right
+        }
+
+        if (rect.height() <= height) {
+            dy = (height - rect.height()) / 2f - rect.top
+        } else if (rect.top > 0f) {
+            dy = -rect.top
+        } else if (rect.bottom < height) {
+            dy = height - rect.bottom
+        }
+
+        displayMatrix.postTranslate(dx, dy)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        scaleDetector.onTouchEvent(event)
+        gestureDetector.onTouchEvent(event)
+
+        when (event.actionMasked) {
+
+            MotionEvent.ACTION_DOWN -> {
+                lastX = event.x
+                lastY = event.y
+                parent?.requestDisallowInterceptTouchEvent(
+                    currentScale > 1f
+                )
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (!scaleDetector.isInProgress && !scaling) {
+
+                    if (currentScale > 1.01f) {
+                        val dx = event.x - lastX
+                        val dy = event.y - lastY
+
+                        displayMatrix.postTranslate(dx, dy)
+
+                        limitMovement()
+                        imageMatrix = displayMatrix
+
+                        parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                }
+
+                lastX = event.x
+                lastY = event.y
+            }
+
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL -> {
+                scaling = false
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+
+        return true
+    }
+
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
+    }
+
+    override fun onSizeChanged(
+        w: Int,
+        h: Int,
+        oldw: Int,
+        oldh: Int
+    ) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        fitImage()
     }
 }
