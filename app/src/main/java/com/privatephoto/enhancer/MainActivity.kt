@@ -202,6 +202,46 @@ class MainActivity : Activity() {
         }
     }
 
+    // NEW: More reliable photo reading method.
+    // Supports Android document providers and gallery URIs.
+
+    private fun readPhotoBytes(uri: Uri): ByteArray {
+
+        var firstError: Exception? = null
+
+        try {
+            val descriptor = contentResolver.openAssetFileDescriptor(
+                uri,
+                "r"
+            )
+
+            if (descriptor != null) {
+                descriptor.use {
+                    return it.createInputStream().use { stream ->
+                        stream.readBytes()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            firstError = e
+        }
+
+        try {
+            val stream = contentResolver.openInputStream(uri)
+                ?: throw Exception("Photo provider returned no stream")
+
+            return stream.use {
+                it.readBytes()
+            }
+
+        } catch (e: Exception) {
+            throw Exception(
+                "Cannot read selected photo. " +
+                    (e.message ?: firstError?.message ?: "Access denied")
+            )
+        }
+    }
+
     private fun enhancePhoto(uri: Uri) {
 
         if (isProcessing || isSaving) return
@@ -230,16 +270,30 @@ class MainActivity : Activity() {
 
             try {
 
+                // Read the photo once instead of repeatedly
+                // requesting streams from the photo provider.
+
+                val photoBytes = readPhotoBytes(uri)
+
+                if (photoBytes.isEmpty()) {
+                    throw Exception("Selected photo is empty")
+                }
+
                 val bounds = BitmapFactory.Options().apply {
                     inJustDecodeBounds = true
                 }
 
-                contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, bounds)
-                } ?: throw Exception("Cannot open photo")
+                BitmapFactory.decodeByteArray(
+                    photoBytes,
+                    0,
+                    photoBytes.size,
+                    bounds
+                )
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    throw Exception("Invalid or unsupported photo")
+                    throw Exception(
+                        "Invalid or unsupported photo format"
+                    )
                 }
 
                 var sample = 1
@@ -256,9 +310,14 @@ class MainActivity : Activity() {
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
 
-                original = contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, options)
-                } ?: throw Exception("Could not decode photo")
+                original = BitmapFactory.decodeByteArray(
+                    photoBytes,
+                    0,
+                    photoBytes.size,
+                    options
+                ) ?: throw Exception(
+                    "Could not decode photo"
+                )
 
                 val source = original
                     ?: throw Exception("Photo decoding failed")
@@ -703,9 +762,12 @@ class MainActivity : Activity() {
             val uri = data?.data ?: return
 
             try {
+                val permissionFlags = data.flags and
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+
                 contentResolver.takePersistableUriPermission(
                     uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    permissionFlags
                 )
             } catch (e: Exception) {
                 // Temporary access may still be available.
