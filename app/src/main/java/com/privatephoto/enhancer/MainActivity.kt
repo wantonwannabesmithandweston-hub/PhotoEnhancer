@@ -234,7 +234,7 @@ class MainActivity : Activity() {
             var environment: LiteRtEnvironment? = null
             var model: CompiledModel? = null
 
-            val resultMessage: String
+            var resultMessage = ""
 
             try {
                 environment = Tasks.await(
