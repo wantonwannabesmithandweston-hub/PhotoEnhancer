@@ -1,4 +1,3 @@
-
 package com.privatephoto.enhancer
 
 import android.app.Activity
@@ -26,7 +25,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.google.ai.edge.litert.Accelerator
 import com.google.ai.edge.litert.CompiledModel
-import com.google.ai.edge.litert.Environment
+import com.google.ai.edge.litert.Environment as LiteRtEnvironment
 import com.google.android.gms.litert.LiteRt
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.Executors
@@ -232,7 +231,7 @@ class MainActivity : Activity() {
         statusText.text = "Testing Real-ESRGAN AI model..."
 
         executor.execute {
-            var environment: Environment? = null
+            var environment: LiteRtEnvironment? = null
             var model: CompiledModel? = null
 
             val resultMessage: String
