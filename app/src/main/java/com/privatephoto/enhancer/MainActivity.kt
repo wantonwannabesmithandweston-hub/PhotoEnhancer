@@ -242,7 +242,8 @@ class MainActivity : Activity() {
             var inputs: List<TensorBuffer> = emptyList()
             var outputs: List<TensorBuffer> = emptyList()
 
-            val resultMessage: String
+            // FIX: var allows assignment in both try and catch.
+            var resultMessage: String = ""
 
             try {
                 environment = Tasks.await(
@@ -378,7 +379,6 @@ class MainActivity : Activity() {
                     throw Exception("Invalid photo")
                 }
 
-                // Limit input size to protect phone memory.
                 var sample = 1
 
                 while (
@@ -565,9 +565,6 @@ class MainActivity : Activity() {
             for (tileY in 0 until height step tileSize) {
                 for (tileX in 0 until width step tileSize) {
 
-                    // Prepare 128x128 RGB input.
-                    // Edge pixels are extended to fill incomplete tiles.
-
                     for (y in 0 until tileSize) {
                         for (x in 0 until tileSize) {
 
@@ -583,8 +580,6 @@ class MainActivity : Activity() {
                             var r = Color.red(pixel) / 255f
                             var g = Color.green(pixel) / 255f
                             var b = Color.blue(pixel) / 255f
-
-                            // Apply selected enhancement strength.
 
                             r = ((r - 0.5f) * contrast + 0.5f)
                                 .coerceIn(0f, 1f)
@@ -611,8 +606,6 @@ class MainActivity : Activity() {
 
                             val index = y * tileSize + x
 
-                            // NCHW: separate R, G and B planes.
-
                             inputData[index] = r
 
                             inputData[
@@ -625,11 +618,7 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    // Send image tile into Real-ESRGAN.
-
                     inputBuffer.writeFloat(inputData)
-
-                    // Run actual neural-network inference.
 
                     model.run(inputBuffers, outputBuffers)
 
@@ -640,8 +629,6 @@ class MainActivity : Activity() {
                             "Unexpected AI output size: ${aiOutput.size}"
                         )
                     }
-
-                    // Convert NCHW AI output into Android RGB pixels.
 
                     val tilePixels = IntArray(
                         outputTileSize * outputTileSize
@@ -671,8 +658,6 @@ class MainActivity : Activity() {
                                 Color.rgb(r, g, b)
                         }
                     }
-
-                    // Copy only the valid portion of edge tiles.
 
                     val validWidth =
                         minOf(tileSize, width - tileX) * 4
