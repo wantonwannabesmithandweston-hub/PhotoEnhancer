@@ -1,3 +1,4 @@
+
 package com.privatephoto.enhancer
 
 import android.app.Activity
@@ -26,6 +27,7 @@ import android.widget.Toast
 import com.google.ai.edge.litert.Accelerator
 import com.google.ai.edge.litert.CompiledModel
 import com.google.ai.edge.litert.Environment as LiteRtEnvironment
+import com.google.ai.edge.litert.TensorBuffer
 import com.google.android.gms.litert.LiteRt
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.Executors
@@ -56,6 +58,11 @@ class MainActivity : Activity() {
     private var isProcessing = false
     private var isSaving = false
     private var isModelTesting = false
+
+    private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
+
+    private val tileSize = 128
+    private val outputTileSize = 512
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).roundToInt()
@@ -152,6 +159,7 @@ class MainActivity : Activity() {
             val button = Button(this).apply {
                 text = strength
             }
+
             strengthButtons[strength] = button
             layout.addView(button)
 
@@ -217,16 +225,13 @@ class MainActivity : Activity() {
         statusText.text = "Upload a photo to get started"
     }
 
-    // REAL-ESRGAN MODEL LOADING TEST
+    // REAL AI MODEL TEST
 
     private fun testAiModel() {
         if (isModelTesting || isProcessing || isSaving) return
 
         isModelTesting = true
-        testAiButton.isEnabled = false
-        enhanceButton.isEnabled = false
-        uploadButton.isEnabled = false
-        saveButton.isEnabled = false
+        setControlsEnabled(false)
 
         statusText.text = "Testing Real-ESRGAN AI model..."
 
@@ -234,7 +239,10 @@ class MainActivity : Activity() {
             var environment: LiteRtEnvironment? = null
             var model: CompiledModel? = null
 
-            var resultMessage = ""
+            var inputs: List<TensorBuffer> = emptyList()
+            var outputs: List<TensorBuffer> = emptyList()
+
+            val resultMessage: String
 
             try {
                 environment = Tasks.await(
@@ -243,61 +251,82 @@ class MainActivity : Activity() {
 
                 model = CompiledModel.create(
                     assets,
-                    "Real-ESRGAN-General-x4v3.tflite",
+                    modelFile,
                     CompiledModel.Options(Accelerator.CPU),
                     environment
                 )
 
+                inputs = model.createInputBuffers()
+                outputs = model.createOutputBuffers()
+
+                if (inputs.isEmpty() || outputs.isEmpty()) {
+                    throw Exception("Model has no input or output tensors")
+                }
+
                 resultMessage =
-                    "AI MODEL LOADED SUCCESSFULLY! Load test passed."
+                    "AI MODEL LOADED SUCCESSFULLY! Ready for AI enhancement."
 
             } catch (e: Exception) {
                 resultMessage =
                     "AI model test failed: ${e.message ?: e.javaClass.simpleName}"
 
             } finally {
-                try {
-                    model?.close()
-                } catch (_: Exception) {
+                inputs.forEach {
+                    try { it.close() } catch (_: Exception) {}
+                }
+                outputs.forEach {
+                    try { it.close() } catch (_: Exception) {}
                 }
 
-                try {
-                    environment?.close()
-                } catch (_: Exception) {
-                }
+                try { model?.close() } catch (_: Exception) {}
+                try { environment?.close() } catch (_: Exception) {}
             }
 
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
 
                 isModelTesting = false
-                testAiButton.isEnabled = true
-                enhanceButton.isEnabled = true
-                uploadButton.isEnabled = true
-                saveButton.isEnabled =
-                    enhancedBitmap != null && !enhancedBitmap!!.isRecycled
-
+                setControlsEnabled(true)
                 statusText.text = resultMessage
             }
         }
     }
 
-    // DISPLAY ORIGINAL OR ENHANCED PHOTO
+    private fun setControlsEnabled(enabled: Boolean) {
+        enhanceButton.isEnabled = enabled
+        uploadButton.isEnabled = enabled
+        testAiButton.isEnabled = enabled
+        saveButton.isEnabled =
+            enabled && enhancedBitmap != null &&
+                !enhancedBitmap!!.isRecycled
+
+        compareButton.isEnabled =
+            enabled && enhancedBitmap != null
+
+        strengthButtons.values.forEach {
+            it.isEnabled = enabled
+        }
+    }
+
+    // DISPLAY PHOTO
 
     private fun displayCurrentPhoto() {
         if (isShowingEnhanced) {
             val bitmap = enhancedBitmap
+
             if (bitmap != null && !bitmap.isRecycled) {
                 photoView.setImageBitmap(bitmap)
                 compareButton.text = "View Original Photo"
             }
         } else {
             val uri = selectedImage
+
             if (uri != null) {
                 photoView.setImageURI(uri)
                 compareButton.text = "View Enhanced Photo"
             }
         }
+
         photoView.resetZoom()
     }
 
@@ -316,10 +345,11 @@ class MainActivity : Activity() {
     private fun readPhotoBytes(uri: Uri): ByteArray {
         val stream = contentResolver.openInputStream(uri)
             ?: throw Exception("Cannot open selected photo")
+
         return stream.use { it.readBytes() }
     }
 
-    // PHOTO ENHANCEMENT
+    // ACTUAL REAL-ESRGAN PHOTO ENHANCEMENT
 
     private fun enhancePhoto(uri: Uri) {
         if (isProcessing || isSaving || isModelTesting) return
@@ -327,13 +357,8 @@ class MainActivity : Activity() {
         isProcessing = true
         val strength = selectedStrength
 
-        enhanceButton.isEnabled = false
-        saveButton.isEnabled = false
-        uploadButton.isEnabled = false
-        compareButton.isEnabled = false
-        testAiButton.isEnabled = false
-
-        statusText.text = "Enhancing photo..."
+        setControlsEnabled(false)
+        statusText.text = "Preparing photo for AI enhancement..."
 
         executor.execute {
             var result: Bitmap? = null
@@ -350,13 +375,15 @@ class MainActivity : Activity() {
                 )
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    throw Exception("Unsupported or invalid image")
+                    throw Exception("Invalid photo")
                 }
 
+                // Limit input size to protect phone memory.
                 var sample = 1
+
                 while (
-                    bounds.outWidth / sample > 1600 ||
-                    bounds.outHeight / sample > 1600
+                    bounds.outWidth / sample > 768 ||
+                    bounds.outHeight / sample > 768
                 ) {
                     sample *= 2
                 }
@@ -371,13 +398,28 @@ class MainActivity : Activity() {
                 ) ?: throw Exception("Could not decode photo")
 
                 try {
-                    result = processImage(source, strength)
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            statusText.text =
+                                "Running Real-ESRGAN AI enhancement..."
+                        }
+                    }
+
+                    result = runRealEsrgan(source, strength) { completed, total ->
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                statusText.text =
+                                    "AI processing tile $completed of $total..."
+                            }
+                        }
+                    }
+
                 } finally {
                     source.recycle()
                 }
 
                 val completed = result
-                    ?: throw Exception("No enhanced image produced")
+                    ?: throw Exception("AI did not produce an image")
 
                 runOnUiThread {
                     if (isFinishing || isDestroyed) {
@@ -391,21 +433,19 @@ class MainActivity : Activity() {
 
                     enhancedBitmap = completed
                     isShowingEnhanced = true
+
                     displayCurrentPhoto()
 
-                    compareButton.isEnabled = true
-                    statusText.text = "Enhancement complete! ($strength)"
-
                     isProcessing = false
-                    enhanceButton.isEnabled = true
-                    uploadButton.isEnabled = true
-                    saveButton.isEnabled = true
-                    testAiButton.isEnabled = true
+                    setControlsEnabled(true)
+
+                    statusText.text =
+                        "Real-ESRGAN AI enhancement complete! 4× upscale ($strength)"
 
                     Toast.makeText(
                         this,
-                        "Enhanced photo is ready!",
-                        Toast.LENGTH_SHORT
+                        "AI enhanced photo is ready!",
+                        Toast.LENGTH_LONG
                     ).show()
                 }
 
@@ -420,141 +460,260 @@ class MainActivity : Activity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
 
                     isProcessing = false
-                    statusText.text = "Enhancement failed: ${e.message}"
+                    setControlsEnabled(true)
 
-                    enhanceButton.isEnabled = true
-                    uploadButton.isEnabled = true
-                    testAiButton.isEnabled = true
-                    saveButton.isEnabled = enhancedBitmap != null
-                    compareButton.isEnabled = enhancedBitmap != null
+                    statusText.text =
+                        "AI enhancement failed: ${e.message}"
+
+                    Toast.makeText(
+                        this,
+                        "AI enhancement failed",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
     }
 
-    // IMAGE PROCESSING ENGINE
+    // REAL-ESRGAN TILE INFERENCE ENGINE
 
-    private fun processImage(
+    private fun runRealEsrgan(
         source: Bitmap,
-        strength: String
+        strength: String,
+        progress: (Int, Int) -> Unit
     ): Bitmap {
 
-        val contrast = when (strength) {
-            "Low" -> 1.10f
-            "High" -> 1.30f
-            else -> 1.20f
-        }
+        var environment: LiteRtEnvironment? = null
+        var model: CompiledModel? = null
 
-        val sharpness = when (strength) {
-            "Low" -> 0.55f
-            "High" -> 1.20f
-            else -> 0.85f
-        }
+        var inputBuffers: List<TensorBuffer> = emptyList()
+        var outputBuffers: List<TensorBuffer> = emptyList()
 
-        val brightness = when (strength) {
-            "Low" -> 2f
-            "High" -> 7f
-            else -> 4f
-        }
+        var resultBitmap: Bitmap? = null
 
-        val saturation = when (strength) {
-            "Low" -> 1.04f
-            "High" -> 1.15f
-            else -> 1.09f
-        }
-
-        val width = source.width
-        val height = source.height
-
-        val input = IntArray(width * height)
-        val output = IntArray(width * height)
-
-        source.getPixels(
-            input, 0, width, 0, 0, width, height
-        )
-
-        fun channel(pixel: Int, shift: Int): Int =
-            (pixel shr shift) and 255
-
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                val index = y * width + x
-                val center = input[index]
-
-                val r = channel(center, 16).toFloat()
-                val g = channel(center, 8).toFloat()
-                val b = channel(center, 0).toFloat()
-
-                var sumR = 0f
-                var sumG = 0f
-                var sumB = 0f
-                var count = 0
-
-                for (dy in -1..1) {
-                    for (dx in -1..1) {
-                        if (dx == 0 && dy == 0) continue
-
-                        val nx = (x + dx).coerceIn(0, width - 1)
-                        val ny = (y + dy).coerceIn(0, height - 1)
-
-                        val neighbor = input[ny * width + nx]
-
-                        sumR += channel(neighbor, 16)
-                        sumG += channel(neighbor, 8)
-                        sumB += channel(neighbor, 0)
-                        count++
-                    }
-                }
-
-                val blurR = sumR / count
-                val blurG = sumG / count
-                val blurB = sumB / count
-
-                fun adjust(value: Float, blur: Float): Float {
-                    val sharpened =
-                        value + sharpness * (value - blur)
-
-                    return (
-                        (sharpened - 128f) * contrast +
-                            128f + brightness
-                    ).coerceIn(0f, 255f)
-                }
-
-                var nr = adjust(r, blurR)
-                var ng = adjust(g, blurG)
-                var nb = adjust(b, blurB)
-
-                val gray =
-                    0.299f * nr +
-                    0.587f * ng +
-                    0.114f * nb
-
-                nr = (gray + (nr - gray) * saturation)
-                    .coerceIn(0f, 255f)
-
-                ng = (gray + (ng - gray) * saturation)
-                    .coerceIn(0f, 255f)
-
-                nb = (gray + (nb - gray) * saturation)
-                    .coerceIn(0f, 255f)
-
-                output[index] = Color.argb(
-                    Color.alpha(center),
-                    nr.roundToInt(),
-                    ng.roundToInt(),
-                    nb.roundToInt()
-                )
-            }
-        }
-
-        return Bitmap.createBitmap(
-            width,
-            height,
-            Bitmap.Config.ARGB_8888
-        ).also {
-            it.setPixels(
-                output, 0, width, 0, 0, width, height
+        try {
+            environment = Tasks.await(
+                LiteRt.initialize(applicationContext)
             )
+
+            model = CompiledModel.create(
+                assets,
+                modelFile,
+                CompiledModel.Options(Accelerator.CPU),
+                environment
+            )
+
+            inputBuffers = model.createInputBuffers()
+            outputBuffers = model.createOutputBuffers()
+
+            if (inputBuffers.isEmpty() || outputBuffers.isEmpty()) {
+                throw Exception("Missing AI model tensors")
+            }
+
+            val inputBuffer = inputBuffers[0]
+            val outputBuffer = outputBuffers[0]
+
+            val width = source.width
+            val height = source.height
+
+            val outputWidth = width * 4
+            val outputHeight = height * 4
+
+            val sourcePixels = IntArray(width * height)
+
+            source.getPixels(
+                sourcePixels,
+                0,
+                width,
+                0,
+                0,
+                width,
+                height
+            )
+
+            resultBitmap = Bitmap.createBitmap(
+                outputWidth,
+                outputHeight,
+                Bitmap.Config.ARGB_8888
+            )
+
+            val inputData = FloatArray(
+                3 * tileSize * tileSize
+            )
+
+            val expectedOutputSize =
+                3 * outputTileSize * outputTileSize
+
+            val totalTiles =
+                ((width + tileSize - 1) / tileSize) *
+                ((height + tileSize - 1) / tileSize)
+
+            var tileNumber = 0
+
+            val contrast = when (strength) {
+                "Low" -> 0.98f
+                "High" -> 1.06f
+                else -> 1.02f
+            }
+
+            val saturation = when (strength) {
+                "Low" -> 1.00f
+                "High" -> 1.08f
+                else -> 1.04f
+            }
+
+            for (tileY in 0 until height step tileSize) {
+                for (tileX in 0 until width step tileSize) {
+
+                    // Prepare 128x128 RGB input.
+                    // Edge pixels are extended to fill incomplete tiles.
+
+                    for (y in 0 until tileSize) {
+                        for (x in 0 until tileSize) {
+
+                            val sourceX =
+                                (tileX + x).coerceAtMost(width - 1)
+
+                            val sourceY =
+                                (tileY + y).coerceAtMost(height - 1)
+
+                            val pixel =
+                                sourcePixels[sourceY * width + sourceX]
+
+                            var r = Color.red(pixel) / 255f
+                            var g = Color.green(pixel) / 255f
+                            var b = Color.blue(pixel) / 255f
+
+                            // Apply selected enhancement strength.
+
+                            r = ((r - 0.5f) * contrast + 0.5f)
+                                .coerceIn(0f, 1f)
+
+                            g = ((g - 0.5f) * contrast + 0.5f)
+                                .coerceIn(0f, 1f)
+
+                            b = ((b - 0.5f) * contrast + 0.5f)
+                                .coerceIn(0f, 1f)
+
+                            val gray =
+                                0.299f * r +
+                                0.587f * g +
+                                0.114f * b
+
+                            r = (gray + (r - gray) * saturation)
+                                .coerceIn(0f, 1f)
+
+                            g = (gray + (g - gray) * saturation)
+                                .coerceIn(0f, 1f)
+
+                            b = (gray + (b - gray) * saturation)
+                                .coerceIn(0f, 1f)
+
+                            val index = y * tileSize + x
+
+                            // NCHW: separate R, G and B planes.
+
+                            inputData[index] = r
+
+                            inputData[
+                                tileSize * tileSize + index
+                            ] = g
+
+                            inputData[
+                                2 * tileSize * tileSize + index
+                            ] = b
+                        }
+                    }
+
+                    // Send image tile into Real-ESRGAN.
+
+                    inputBuffer.writeFloat(inputData)
+
+                    // Run actual neural-network inference.
+
+                    model.run(inputBuffers, outputBuffers)
+
+                    val aiOutput = outputBuffer.readFloat()
+
+                    if (aiOutput.size != expectedOutputSize) {
+                        throw Exception(
+                            "Unexpected AI output size: ${aiOutput.size}"
+                        )
+                    }
+
+                    // Convert NCHW AI output into Android RGB pixels.
+
+                    val tilePixels = IntArray(
+                        outputTileSize * outputTileSize
+                    )
+
+                    val planeSize =
+                        outputTileSize * outputTileSize
+
+                    for (y in 0 until outputTileSize) {
+                        for (x in 0 until outputTileSize) {
+
+                            val index = y * outputTileSize + x
+
+                            val r = (
+                                aiOutput[index] * 255f
+                            ).roundToInt().coerceIn(0, 255)
+
+                            val g = (
+                                aiOutput[planeSize + index] * 255f
+                            ).roundToInt().coerceIn(0, 255)
+
+                            val b = (
+                                aiOutput[2 * planeSize + index] * 255f
+                            ).roundToInt().coerceIn(0, 255)
+
+                            tilePixels[index] =
+                                Color.rgb(r, g, b)
+                        }
+                    }
+
+                    // Copy only the valid portion of edge tiles.
+
+                    val validWidth =
+                        minOf(tileSize, width - tileX) * 4
+
+                    val validHeight =
+                        minOf(tileSize, height - tileY) * 4
+
+                    resultBitmap.setPixels(
+                        tilePixels,
+                        0,
+                        outputTileSize,
+                        tileX * 4,
+                        tileY * 4,
+                        validWidth,
+                        validHeight
+                    )
+
+                    tileNumber++
+                    progress(tileNumber, totalTiles)
+                }
+            }
+
+            return resultBitmap
+
+        } catch (e: Exception) {
+            resultBitmap?.let {
+                if (!it.isRecycled) it.recycle()
+            }
+            throw e
+
+        } finally {
+            inputBuffers.forEach {
+                try { it.close() } catch (_: Exception) {}
+            }
+
+            outputBuffers.forEach {
+                try { it.close() } catch (_: Exception) {}
+            }
+
+            try { model?.close() } catch (_: Exception) {}
+            try { environment?.close() } catch (_: Exception) {}
         }
     }
 
@@ -575,12 +734,7 @@ class MainActivity : Activity() {
         if (isProcessing || isSaving || isModelTesting) return
 
         isSaving = true
-
-        saveButton.isEnabled = false
-        enhanceButton.isEnabled = false
-        uploadButton.isEnabled = false
-        compareButton.isEnabled = false
-        testAiButton.isEnabled = false
+        setControlsEnabled(false)
 
         statusText.text = "Saving enhanced photo..."
 
@@ -594,15 +748,18 @@ class MainActivity : Activity() {
                             MediaStore.Images.Media.DISPLAY_NAME,
                             "Enhanced_${System.currentTimeMillis()}.jpg"
                         )
+
                         put(
                             MediaStore.Images.Media.MIME_TYPE,
                             "image/jpeg"
                         )
+
                         put(
                             MediaStore.Images.Media.RELATIVE_PATH,
                             Environment.DIRECTORY_PICTURES +
                                 "/Private Photo Enhancer"
                         )
+
                         put(
                             MediaStore.Images.Media.IS_PENDING,
                             1
@@ -638,20 +795,20 @@ class MainActivity : Activity() {
                     }
 
                     contentResolver.update(
-                        savedUri, finished, null, null
+                        savedUri,
+                        finished,
+                        null,
+                        null
                     )
 
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
 
                         isSaving = false
-                        statusText.text = "Photo saved to your gallery!"
+                        setControlsEnabled(true)
 
-                        saveButton.isEnabled = true
-                        enhanceButton.isEnabled = true
-                        uploadButton.isEnabled = true
-                        compareButton.isEnabled = true
-                        testAiButton.isEnabled = true
+                        statusText.text =
+                            "Photo saved to your gallery!"
 
                         Toast.makeText(
                             this,
@@ -669,13 +826,10 @@ class MainActivity : Activity() {
                         if (isFinishing || isDestroyed) return@runOnUiThread
 
                         isSaving = false
-                        statusText.text = "Save failed: ${e.message}"
+                        setControlsEnabled(true)
 
-                        saveButton.isEnabled = true
-                        enhanceButton.isEnabled = true
-                        uploadButton.isEnabled = true
-                        compareButton.isEnabled = true
-                        testAiButton.isEnabled = true
+                        statusText.text =
+                            "Save failed: ${e.message}"
                     }
                 }
             }
@@ -699,10 +853,7 @@ class MainActivity : Activity() {
 
         if (bitmap == null || bitmap.isRecycled) {
             isSaving = false
-            saveButton.isEnabled = false
-            enhanceButton.isEnabled = true
-            uploadButton.isEnabled = true
-            testAiButton.isEnabled = true
+            setControlsEnabled(true)
             return
         }
 
@@ -728,13 +879,9 @@ class MainActivity : Activity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
 
                     isSaving = false
-                    statusText.text = "Photo saved successfully!"
+                    setControlsEnabled(true)
 
-                    saveButton.isEnabled = true
-                    enhanceButton.isEnabled = true
-                    uploadButton.isEnabled = true
-                    compareButton.isEnabled = true
-                    testAiButton.isEnabled = true
+                    statusText.text = "Photo saved successfully!"
 
                     Toast.makeText(
                         this,
@@ -748,13 +895,8 @@ class MainActivity : Activity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
 
                     isSaving = false
+                    setControlsEnabled(true)
                     statusText.text = "Save failed: ${e.message}"
-
-                    saveButton.isEnabled = true
-                    enhanceButton.isEnabled = true
-                    uploadButton.isEnabled = true
-                    compareButton.isEnabled = true
-                    testAiButton.isEnabled = true
                 }
             }
         }
@@ -806,7 +948,7 @@ class MainActivity : Activity() {
             saveButton.isEnabled = false
 
             statusText.text =
-                "Original photo loaded. Ready to enhance!"
+                "Original photo loaded. Ready for AI enhancement!"
 
             return
         }
@@ -819,20 +961,12 @@ class MainActivity : Activity() {
                     saveBitmapToUri(uri)
                 } else {
                     isSaving = false
-                    saveButton.isEnabled = true
-                    enhanceButton.isEnabled = true
-                    uploadButton.isEnabled = true
-                    compareButton.isEnabled = true
-                    testAiButton.isEnabled = true
+                    setControlsEnabled(true)
                     statusText.text = "No save location selected"
                 }
             } else {
                 isSaving = false
-                saveButton.isEnabled = true
-                enhanceButton.isEnabled = true
-                uploadButton.isEnabled = true
-                testAiButton.isEnabled = true
-                compareButton.isEnabled = enhancedBitmap != null
+                setControlsEnabled(true)
                 statusText.text = "Save cancelled"
             }
         }
@@ -861,7 +995,6 @@ class ZoomableImageView(
     context: android.content.Context
 ) : ImageView(context) {
 
-    private val imageMatrixValues = FloatArray(9)
     private val displayMatrix = Matrix()
 
     private var currentScale = 1f
@@ -887,10 +1020,8 @@ class ZoomableImageView(
                 override fun onScale(
                     detector: ScaleGestureDetector
                 ): Boolean {
-                    val factor = detector.scaleFactor
-
                     val newScale =
-                        (currentScale * factor)
+                        (currentScale * detector.scaleFactor)
                             .coerceIn(1f, maximumZoom)
 
                     val actualFactor = newScale / currentScale
@@ -922,24 +1053,20 @@ class ZoomableImageView(
             context,
             object : GestureDetector.SimpleOnGestureListener() {
 
-                override fun onDown(e: MotionEvent): Boolean {
-                    return true
-                }
+                override fun onDown(e: MotionEvent): Boolean = true
 
                 override fun onDoubleTap(e: MotionEvent): Boolean {
                     if (currentScale > 1.1f) {
                         resetZoom()
                     } else {
-                        val factor = 2.5f
-
                         displayMatrix.postScale(
-                            factor,
-                            factor,
+                            2.5f,
+                            2.5f,
                             e.x,
                             e.y
                         )
 
-                        currentScale = factor
+                        currentScale = 2.5f
                         limitMovement()
                         imageMatrix = displayMatrix
                     }
