@@ -24,12 +24,14 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+
 import com.google.ai.edge.litert.Accelerator
 import com.google.ai.edge.litert.CompiledModel
 import com.google.ai.edge.litert.Environment as LiteRtEnvironment
 import com.google.ai.edge.litert.TensorBuffer
 import com.google.android.gms.litert.LiteRt
 import com.google.android.gms.tasks.Tasks
+
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
@@ -61,8 +63,17 @@ class MainActivity : Activity() {
 
     private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
 
-    private val tileSize = 128
-    private val outputTileSize = 512
+    companion object {
+        private const val TILE_SIZE = 128
+        private const val OUTPUT_TILE_SIZE = 512
+        private const val CHANNELS = 3
+
+        private const val INPUT_ELEMENTS =
+            TILE_SIZE * TILE_SIZE * CHANNELS
+
+        private const val OUTPUT_ELEMENTS =
+            OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE * CHANNELS
+    }
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).roundToInt()
@@ -226,6 +237,7 @@ class MainActivity : Activity() {
     }
 
     // REAL AI MODEL TEST
+    // This performs an actual model inference, not just a load test.
 
     private fun testAiModel() {
         if (isModelTesting || isProcessing || isSaving) return
@@ -242,8 +254,7 @@ class MainActivity : Activity() {
             var inputs: List<TensorBuffer> = emptyList()
             var outputs: List<TensorBuffer> = emptyList()
 
-            // FIX: var allows assignment in both try and catch.
-            var resultMessage: String = ""
+            var resultMessage: String
 
             try {
                 environment = Tasks.await(
@@ -260,27 +271,81 @@ class MainActivity : Activity() {
                 inputs = model.createInputBuffers()
                 outputs = model.createOutputBuffers()
 
-                if (inputs.isEmpty() || outputs.isEmpty()) {
-                    throw Exception("Model has no input or output tensors")
+                if (inputs.size != 1 || outputs.size != 1) {
+                    throw Exception(
+                        "Unexpected model tensor count. " +
+                        "Inputs: ${inputs.size}, outputs: ${outputs.size}"
+                    )
+                }
+
+                // The inspected model expects:
+                // [1, 128, 128, 3] RGB NHWC float32.
+
+                val testInput = FloatArray(INPUT_ELEMENTS) {
+                    0.5f
+                }
+
+                inputs[0].writeFloat(testInput)
+
+                // Run actual AI inference.
+                model.run(inputs, outputs)
+
+                // The inspected model produces:
+                // [1, 512, 512, 3] RGB NHWC float32.
+
+                val testOutput = outputs[0].readFloat()
+
+                if (testOutput.size != OUTPUT_ELEMENTS) {
+                    throw Exception(
+                        "Unexpected output size: ${testOutput.size}. " +
+                        "Expected: $OUTPUT_ELEMENTS"
+                    )
+                }
+
+                if (testOutput.any {
+                    it.isNaN() || it.isInfinite()
+                }) {
+                    throw Exception(
+                        "Model produced invalid output values"
+                    )
                 }
 
                 resultMessage =
-                    "AI MODEL LOADED SUCCESSFULLY! Ready for AI enhancement."
+                    "AI MODEL TEST PASSED!\n" +
+                    "Real inference completed successfully.\n" +
+                    "Input: 128 × 128 RGB\n" +
+                    "Output: 512 × 512 RGB\n" +
+                    "4× AI upscaling is ready."
 
             } catch (e: Exception) {
                 resultMessage =
-                    "AI model test failed: ${e.message ?: e.javaClass.simpleName}"
+                    "AI model test failed:\n" +
+                    (e.message ?: e.javaClass.simpleName)
 
             } finally {
                 inputs.forEach {
-                    try { it.close() } catch (_: Exception) {}
-                }
-                outputs.forEach {
-                    try { it.close() } catch (_: Exception) {}
+                    try {
+                        it.close()
+                    } catch (_: Exception) {
+                    }
                 }
 
-                try { model?.close() } catch (_: Exception) {}
-                try { environment?.close() } catch (_: Exception) {}
+                outputs.forEach {
+                    try {
+                        it.close()
+                    } catch (_: Exception) {
+                    }
+                }
+
+                try {
+                    model?.close()
+                } catch (_: Exception) {
+                }
+
+                try {
+                    environment?.close()
+                } catch (_: Exception) {
+                }
             }
 
             runOnUiThread {
@@ -297,9 +362,11 @@ class MainActivity : Activity() {
         enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
+
         saveButton.isEnabled =
-            enabled && enhancedBitmap != null &&
-                !enhancedBitmap!!.isRecycled
+            enabled &&
+            enhancedBitmap != null &&
+            !enhancedBitmap!!.isRecycled
 
         compareButton.isEnabled =
             enabled && enhancedBitmap != null
@@ -336,7 +403,10 @@ class MainActivity : Activity() {
 
         strengthButtons.forEach { (strength, button) ->
             val selected = strength == selectedStrength
-            button.text = if (selected) "✓ $strength" else strength
+
+            button.text =
+                if (selected) "✓ $strength" else strength
+
             button.setTextColor(
                 if (selected) Color.GREEN else Color.WHITE
             )
@@ -347,10 +417,12 @@ class MainActivity : Activity() {
         val stream = contentResolver.openInputStream(uri)
             ?: throw Exception("Cannot open selected photo")
 
-        return stream.use { it.readBytes() }
+        return stream.use {
+            it.readBytes()
+        }
     }
 
-    // ACTUAL REAL-ESRGAN PHOTO ENHANCEMENT
+    // REAL-ESRGAN PHOTO ENHANCEMENT
 
     private fun enhancePhoto(uri: Uri) {
         if (isProcessing || isSaving || isModelTesting) return
@@ -372,7 +444,10 @@ class MainActivity : Activity() {
                 }
 
                 BitmapFactory.decodeByteArray(
-                    bytes, 0, bytes.size, bounds
+                    bytes,
+                    0,
+                    bytes.size,
+                    bounds
                 )
 
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
@@ -394,7 +469,10 @@ class MainActivity : Activity() {
                 }
 
                 val source = BitmapFactory.decodeByteArray(
-                    bytes, 0, bytes.size, options
+                    bytes,
+                    0,
+                    bytes.size,
+                    options
                 ) ?: throw Exception("Could not decode photo")
 
                 try {
@@ -405,7 +483,9 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    result = runRealEsrgan(source, strength) { completed, total ->
+                    result = runRealEsrgan(source, strength) {
+                            completed, total ->
+
                         runOnUiThread {
                             if (!isFinishing && !isDestroyed) {
                                 statusText.text =
@@ -428,7 +508,9 @@ class MainActivity : Activity() {
                     }
 
                     enhancedBitmap?.let {
-                        if (!it.isRecycled) it.recycle()
+                        if (!it.isRecycled) {
+                            it.recycle()
+                        }
                     }
 
                     enhancedBitmap = completed
@@ -440,7 +522,8 @@ class MainActivity : Activity() {
                     setControlsEnabled(true)
 
                     statusText.text =
-                        "Real-ESRGAN AI enhancement complete! 4× upscale ($strength)"
+                        "Real-ESRGAN AI enhancement complete! " +
+                        "4× upscale ($strength)"
 
                     Toast.makeText(
                         this,
@@ -453,7 +536,9 @@ class MainActivity : Activity() {
 
             } catch (e: Exception) {
                 result?.let {
-                    if (!it.isRecycled) it.recycle()
+                    if (!it.isRecycled) {
+                        it.recycle()
+                    }
                 }
 
                 runOnUiThread {
@@ -476,6 +561,12 @@ class MainActivity : Activity() {
     }
 
     // REAL-ESRGAN TILE INFERENCE ENGINE
+    //
+    // Verified model input:
+    // [1, 128, 128, 3] NHWC RGB float32
+    //
+    // Verified model output:
+    // [1, 512, 512, 3] NHWC RGB float32
 
     private fun runRealEsrgan(
         source: Bitmap,
@@ -506,8 +597,8 @@ class MainActivity : Activity() {
             inputBuffers = model.createInputBuffers()
             outputBuffers = model.createOutputBuffers()
 
-            if (inputBuffers.isEmpty() || outputBuffers.isEmpty()) {
-                throw Exception("Missing AI model tensors")
+            if (inputBuffers.size != 1 || outputBuffers.size != 1) {
+                throw Exception("Unexpected AI model tensor count")
             }
 
             val inputBuffer = inputBuffers[0]
@@ -531,22 +622,23 @@ class MainActivity : Activity() {
                 height
             )
 
-            resultBitmap = Bitmap.createBitmap(
+            val destination = Bitmap.createBitmap(
                 outputWidth,
                 outputHeight,
                 Bitmap.Config.ARGB_8888
             )
 
-            val inputData = FloatArray(
-                3 * tileSize * tileSize
-            )
+            resultBitmap = destination
 
-            val expectedOutputSize =
-                3 * outputTileSize * outputTileSize
+            // NHWC input: RGB RGB RGB...
+            val inputData = FloatArray(INPUT_ELEMENTS)
+
+            // NHWC output: RGB RGB RGB...
+            val expectedOutputSize = OUTPUT_ELEMENTS
 
             val totalTiles =
-                ((width + tileSize - 1) / tileSize) *
-                ((height + tileSize - 1) / tileSize)
+                ((width + TILE_SIZE - 1) / TILE_SIZE) *
+                ((height + TILE_SIZE - 1) / TILE_SIZE)
 
             var tileNumber = 0
 
@@ -562,11 +654,13 @@ class MainActivity : Activity() {
                 else -> 1.04f
             }
 
-            for (tileY in 0 until height step tileSize) {
-                for (tileX in 0 until width step tileSize) {
+            for (tileY in 0 until height step TILE_SIZE) {
+                for (tileX in 0 until width step TILE_SIZE) {
 
-                    for (y in 0 until tileSize) {
-                        for (x in 0 until tileSize) {
+                    // Prepare one 128 × 128 RGB input tile.
+
+                    for (y in 0 until TILE_SIZE) {
+                        for (x in 0 until TILE_SIZE) {
 
                             val sourceX =
                                 (tileX + x).coerceAtMost(width - 1)
@@ -581,44 +675,54 @@ class MainActivity : Activity() {
                             var g = Color.green(pixel) / 255f
                             var b = Color.blue(pixel) / 255f
 
-                            r = ((r - 0.5f) * contrast + 0.5f)
-                                .coerceIn(0f, 1f)
+                            // Strength adjustment before AI inference.
 
-                            g = ((g - 0.5f) * contrast + 0.5f)
-                                .coerceIn(0f, 1f)
+                            r = (
+                                (r - 0.5f) * contrast + 0.5f
+                            ).coerceIn(0f, 1f)
 
-                            b = ((b - 0.5f) * contrast + 0.5f)
-                                .coerceIn(0f, 1f)
+                            g = (
+                                (g - 0.5f) * contrast + 0.5f
+                            ).coerceIn(0f, 1f)
+
+                            b = (
+                                (b - 0.5f) * contrast + 0.5f
+                            ).coerceIn(0f, 1f)
 
                             val gray =
                                 0.299f * r +
                                 0.587f * g +
                                 0.114f * b
 
-                            r = (gray + (r - gray) * saturation)
-                                .coerceIn(0f, 1f)
+                            r = (
+                                gray + (r - gray) * saturation
+                            ).coerceIn(0f, 1f)
 
-                            g = (gray + (g - gray) * saturation)
-                                .coerceIn(0f, 1f)
+                            g = (
+                                gray + (g - gray) * saturation
+                            ).coerceIn(0f, 1f)
 
-                            b = (gray + (b - gray) * saturation)
-                                .coerceIn(0f, 1f)
+                            b = (
+                                gray + (b - gray) * saturation
+                            ).coerceIn(0f, 1f)
 
-                            val index = y * tileSize + x
+                            // NHWC indexing:
+                            // pixel index * 3 + channel.
+
+                            val index =
+                                (y * TILE_SIZE + x) * CHANNELS
 
                             inputData[index] = r
-
-                            inputData[
-                                tileSize * tileSize + index
-                            ] = g
-
-                            inputData[
-                                2 * tileSize * tileSize + index
-                            ] = b
+                            inputData[index + 1] = g
+                            inputData[index + 2] = b
                         }
                     }
 
+                    // Send NHWC RGB input to the model.
+
                     inputBuffer.writeFloat(inputData)
+
+                    // Run actual Real-ESRGAN inference.
 
                     model.run(inputBuffers, outputBuffers)
 
@@ -626,49 +730,53 @@ class MainActivity : Activity() {
 
                     if (aiOutput.size != expectedOutputSize) {
                         throw Exception(
-                            "Unexpected AI output size: ${aiOutput.size}"
+                            "Unexpected AI output size: ${aiOutput.size}. " +
+                            "Expected: $expectedOutputSize"
                         )
                     }
 
+                    // Convert NHWC RGB output to Android bitmap pixels.
+
                     val tilePixels = IntArray(
-                        outputTileSize * outputTileSize
+                        OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE
                     )
 
-                    val planeSize =
-                        outputTileSize * outputTileSize
+                    for (y in 0 until OUTPUT_TILE_SIZE) {
+                        for (x in 0 until OUTPUT_TILE_SIZE) {
 
-                    for (y in 0 until outputTileSize) {
-                        for (x in 0 until outputTileSize) {
-
-                            val index = y * outputTileSize + x
+                            val index =
+                                (y * OUTPUT_TILE_SIZE + x) * CHANNELS
 
                             val r = (
                                 aiOutput[index] * 255f
                             ).roundToInt().coerceIn(0, 255)
 
                             val g = (
-                                aiOutput[planeSize + index] * 255f
+                                aiOutput[index + 1] * 255f
                             ).roundToInt().coerceIn(0, 255)
 
                             val b = (
-                                aiOutput[2 * planeSize + index] * 255f
+                                aiOutput[index + 2] * 255f
                             ).roundToInt().coerceIn(0, 255)
 
-                            tilePixels[index] =
-                                Color.rgb(r, g, b)
+                            tilePixels[
+                                y * OUTPUT_TILE_SIZE + x
+                            ] = Color.rgb(r, g, b)
                         }
                     }
 
+                    // Only copy the valid part of edge tiles.
+
                     val validWidth =
-                        minOf(tileSize, width - tileX) * 4
+                        minOf(TILE_SIZE, width - tileX) * 4
 
                     val validHeight =
-                        minOf(tileSize, height - tileY) * 4
+                        minOf(TILE_SIZE, height - tileY) * 4
 
-                    resultBitmap.setPixels(
+                    destination.setPixels(
                         tilePixels,
                         0,
-                        outputTileSize,
+                        OUTPUT_TILE_SIZE,
                         tileX * 4,
                         tileY * 4,
                         validWidth,
@@ -680,25 +788,41 @@ class MainActivity : Activity() {
                 }
             }
 
-            return resultBitmap
+            return destination
 
         } catch (e: Exception) {
             resultBitmap?.let {
-                if (!it.isRecycled) it.recycle()
+                if (!it.isRecycled) {
+                    it.recycle()
+                }
             }
+
             throw e
 
         } finally {
             inputBuffers.forEach {
-                try { it.close() } catch (_: Exception) {}
+                try {
+                    it.close()
+                } catch (_: Exception) {
+                }
             }
 
             outputBuffers.forEach {
-                try { it.close() } catch (_: Exception) {}
+                try {
+                    it.close()
+                } catch (_: Exception) {
+                }
             }
 
-            try { model?.close() } catch (_: Exception) {}
-            try { environment?.close() } catch (_: Exception) {}
+            try {
+                model?.close()
+            } catch (_: Exception) {
+            }
+
+            try {
+                environment?.close()
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -757,7 +881,8 @@ class MainActivity : Activity() {
                     ) ?: throw Exception("Could not create photo")
 
                     val output = contentResolver.openOutputStream(
-                        savedUri, "w"
+                        savedUri,
+                        "w"
                     ) ?: throw Exception("Could not open output")
 
                     val success = output.use {
@@ -823,6 +948,7 @@ class MainActivity : Activity() {
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "image/jpeg"
+
                 putExtra(
                     Intent.EXTRA_TITLE,
                     "Enhanced_Photo.jpg"
@@ -845,7 +971,8 @@ class MainActivity : Activity() {
         executor.execute {
             try {
                 val output = contentResolver.openOutputStream(
-                    uri, "w"
+                    uri,
+                    "w"
                 ) ?: throw Exception("Could not open output")
 
                 val success = output.use {
@@ -881,7 +1008,9 @@ class MainActivity : Activity() {
 
                     isSaving = false
                     setControlsEnabled(true)
-                    statusText.text = "Save failed: ${e.message}"
+
+                    statusText.text =
+                        "Save failed: ${e.message}"
                 }
             }
         }
@@ -918,7 +1047,9 @@ class MainActivity : Activity() {
             selectedImage = uri
 
             enhancedBitmap?.let {
-                if (!it.isRecycled) it.recycle()
+                if (!it.isRecycled) {
+                    it.recycle()
+                }
             }
 
             enhancedBitmap = null
@@ -960,10 +1091,14 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         executor.shutdownNow()
 
-        photoView.setImageDrawable(null)
+        if (::photoView.isInitialized) {
+            photoView.setImageDrawable(null)
+        }
 
         enhancedBitmap?.let {
-            if (!it.isRecycled) it.recycle()
+            if (!it.isRecycled) {
+                it.recycle()
+            }
         }
 
         enhancedBitmap = null
