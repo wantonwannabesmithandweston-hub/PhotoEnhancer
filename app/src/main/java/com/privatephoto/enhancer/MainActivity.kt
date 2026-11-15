@@ -103,13 +103,13 @@ class MainActivity : Activity() {
         }
         layout.addView(title)
 
-        val hint = TextView(this).apply {
+        val subtitle = TextView(this).apply {
             text = "Free Offline AI Photo Editing"
             textSize = 14f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
         }
-        layout.addView(hint)
+        layout.addView(subtitle)
 
         photoView = ZoomableImageView(this).apply {
             setBackgroundColor(Color.rgb(35, 35, 35))
@@ -156,8 +156,6 @@ class MainActivity : Activity() {
             }
         }
 
-        // CUSTOM EDITING INSTRUCTIONS
-
         val instructionTitle = TextView(this).apply {
             text = "Custom Editing Instructions"
             textSize = 20f
@@ -168,7 +166,7 @@ class MainActivity : Activity() {
         layout.addView(instructionTitle)
 
         instructionsInput = EditText(this).apply {
-            hint = "Example: Make the photo brighter, increase sharpness, add warmth, and make colors more vivid..."
+            this.hint = "Example: Make the photo brighter, increase sharpness, add warmth, and make colors more vivid..."
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
             textSize = 15f
@@ -284,8 +282,6 @@ class MainActivity : Activity() {
         statusText.text = "Upload a photo to get started"
     }
 
-    // ENABLE / DISABLE CONTROLS
-
     private fun setControlsEnabled(enabled: Boolean) {
         enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
@@ -304,8 +300,6 @@ class MainActivity : Activity() {
             it.isEnabled = enabled
         }
     }
-
-    // DISPLAY PHOTO
 
     private fun displayCurrentPhoto() {
         if (isShowingEnhanced) {
@@ -350,8 +344,6 @@ class MainActivity : Activity() {
             it.readBytes()
         }
     }
-
-    // TEST REAL AI MODEL
 
     private fun testAiModel() {
         if (isModelTesting || isProcessing || isSaving) return
@@ -440,8 +432,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // PARSE OFFLINE EDITING INSTRUCTIONS
-
     private data class EditSettings(
         var brightness: Float = 0f,
         var contrast: Float = 1f,
@@ -486,8 +476,6 @@ class MainActivity : Activity() {
 
         val text = instructions.lowercase()
 
-        // Brightness
-
         if (
             text.contains("brighter") ||
             text.contains("brighten") ||
@@ -505,8 +493,6 @@ class MainActivity : Activity() {
             settings.brightness -= 0.12f
         }
 
-        // Contrast
-
         if (
             text.contains("more contrast") ||
             text.contains("increase contrast")
@@ -520,8 +506,6 @@ class MainActivity : Activity() {
         ) {
             settings.contrast -= 0.10f
         }
-
-        // Saturation
 
         if (
             text.contains("vivid") ||
@@ -541,8 +525,6 @@ class MainActivity : Activity() {
             settings.saturation -= 0.20f
         }
 
-        // Warmth
-
         if (
             text.contains("warmer") ||
             text.contains("warm tones") ||
@@ -558,8 +540,6 @@ class MainActivity : Activity() {
         ) {
             settings.warmth -= 0.10f
         }
-
-        // Sharpness
 
         if (
             text.contains("sharper") ||
@@ -585,8 +565,6 @@ class MainActivity : Activity() {
             settings.sharpen = 0f
         }
 
-        // Black and white
-
         if (
             text.contains("black and white") ||
             text.contains("black & white") ||
@@ -595,8 +573,6 @@ class MainActivity : Activity() {
         ) {
             settings.grayscale = true
         }
-
-        // Keep adjustments within sensible limits.
 
         settings.brightness =
             settings.brightness.coerceIn(-0.30f, 0.30f)
@@ -615,9 +591,6 @@ class MainActivity : Activity() {
 
         return settings
     }
-
-    // LOCAL IMAGE PROCESSING
-    // No internet or paid AI service required.
 
     private fun applyLocalEditing(
         source: Bitmap,
@@ -674,8 +647,6 @@ class MainActivity : Activity() {
                 val centerG = Color.green(center).toFloat()
                 val centerB = Color.blue(center).toFloat()
 
-                // Calculate local neighborhood for sharpening.
-
                 val left = current[(x - 1).coerceAtLeast(0)]
                 val right = current[(x + 1).coerceAtMost(width - 1)]
 
@@ -703,8 +674,6 @@ class MainActivity : Activity() {
                     Color.blue(bottom)
                 ) / 4f
 
-                // Unsharp masking.
-
                 var r = centerR +
                     settings.sharpen * (centerR - neighborsR)
 
@@ -713,8 +682,6 @@ class MainActivity : Activity() {
 
                 var b = centerB +
                     settings.sharpen * (centerB - neighborsB)
-
-                // Brightness and contrast.
 
                 r = (r - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
@@ -725,12 +692,8 @@ class MainActivity : Activity() {
                 b = (b - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
 
-                // Color temperature.
-
                 r += settings.warmth * 255f
                 b -= settings.warmth * 255f
-
-                // Saturation.
 
                 val gray =
                     0.299f * r +
@@ -740,8 +703,6 @@ class MainActivity : Activity() {
                 r = gray + (r - gray) * settings.saturation
                 g = gray + (g - gray) * settings.saturation
                 b = gray + (b - gray) * settings.saturation
-
-                // Black and white.
 
                 if (settings.grayscale) {
                     r = gray
@@ -770,8 +731,6 @@ class MainActivity : Activity() {
         return output
     }
 
-    // CREATE OVERLAPPING TILE POSITIONS
-
     private fun createTileStarts(length: Int): List<Int> {
         if (length <= TILE_SIZE) return listOf(0)
 
@@ -795,8 +754,6 @@ class MainActivity : Activity() {
 
         return starts
     }
-
-    // REAL-ESRGAN INFERENCE ENGINE
 
     private fun runRealEsrgan(
         source: Bitmap,
@@ -1052,8 +1009,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // COMPLETE PHOTO ENHANCEMENT
-
     private fun enhancePhoto(uri: Uri) {
         if (isProcessing || isSaving || isModelTesting) return
 
@@ -1207,8 +1162,6 @@ class MainActivity : Activity() {
             }
         }
     }
-
-    // SAVE ENHANCED PHOTO
 
     private fun saveEnhancedPhoto() {
         val bitmap = enhancedBitmap
@@ -1378,8 +1331,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // PHOTO UPLOAD AND SAVE RESULT HANDLING
-
     @Suppress("DEPRECATION")
     override fun onActivityResult(
         requestCode: Int,
@@ -1457,10 +1408,6 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 }
-
-// ============================================
-// ZOOMABLE IMAGE VIEW
-// ============================================
 
 class ZoomableImageView(
     context: android.content.Context
