@@ -19,23 +19,28 @@ import android.view.MotionEvent
 import android.view.GestureDetector
 import android.view.ScaleGestureDetector
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-
-import com.google.ai.edge.litert.Accelerator
-import com.google.ai.edge.litert.CompiledModel
-import com.google.ai.edge.litert.Environment as LiteRtEnvironment
-import com.google.ai.edge.litert.TensorBuffer
-import com.google.android.gms.litert.LiteRt
-import com.google.android.gms.tasks.Tasks
-
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.UUID
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
+
+    companion object {
+        private const val SERVER =
+            "https://photoenhancer.onrender.com"
+
+        private const val PICK_IMAGE = 100
+        private const val SAVE_DOCUMENT = 101
+        private const val MAX_UPLOAD_SIZE = 20 * 1024 * 1024
+    }
 
     private lateinit var photoView: ZoomableImageView
     private lateinit var compareButton: Button
@@ -45,6 +50,7 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
+    private lateinit var promptInput: EditText
 
     private var selectedStrength = "Balanced"
     private var selectedImage: Uri? = null
@@ -54,29 +60,9 @@ class MainActivity : Activity() {
     private val strengthButtons = mutableMapOf<String, Button>()
     private val executor = Executors.newSingleThreadExecutor()
 
-    private val PICK_IMAGE = 100
-    private val SAVE_DOCUMENT = 101
-
     private var isProcessing = false
     private var isSaving = false
-    private var isModelTesting = false
-
-    private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
-
-    companion object {
-        private const val TILE_SIZE = 128
-        private const val OUTPUT_TILE_SIZE = 512
-        private const val CHANNELS = 3
-        private const val TILE_STRIDE = 96
-
-        private const val INPUT_ELEMENTS =
-            TILE_SIZE * TILE_SIZE * CHANNELS
-
-        private const val OUTPUT_ELEMENTS =
-            OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE * CHANNELS
-
-        private const val MAX_INPUT_DIMENSION = 768
-    }
+    private var isTesting = false
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).roundToInt()
@@ -102,7 +88,7 @@ class MainActivity : Activity() {
         layout.addView(title)
 
         val hint = TextView(this).apply {
-            text = "Pinch to zoom • Drag to inspect • Double-tap to zoom"
+            text = "Cloud AI Enhancement • Pinch to zoom • Drag to inspect"
             textSize = 13f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -143,7 +129,7 @@ class MainActivity : Activity() {
         layout.addView(uploadButton)
 
         uploadButton.setOnClickListener {
-            if (!isProcessing && !isSaving && !isModelTesting) {
+            if (!isBusy()) {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
                     type = "image/*"
@@ -154,13 +140,13 @@ class MainActivity : Activity() {
             }
         }
 
-        val label = TextView(this).apply {
+        val strengthLabel = TextView(this).apply {
             text = "Enhancement Strength"
             textSize = 20f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }
-        layout.addView(label)
+        layout.addView(strengthLabel)
 
         strengthText = TextView(this).apply {
             textSize = 17f
@@ -178,15 +164,45 @@ class MainActivity : Activity() {
             layout.addView(button)
 
             button.setOnClickListener {
-                if (!isProcessing && !isSaving && !isModelTesting) {
+                if (!isBusy()) {
                     selectedStrength = strength
                     updateStrengthButtons()
                 }
             }
         }
 
+        val promptLabel = TextView(this).apply {
+            text = "Custom Editing Instructions"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(6))
+        }
+        layout.addView(promptLabel)
+
+        promptInput = EditText(this).apply {
+            hint = "Example: Improve lighting, sharpen details, reduce noise..."
+            setHintTextColor(Color.GRAY)
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            minLines = 3
+            maxLines = 5
+            gravity = Gravity.TOP or Gravity.START
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setBackgroundColor(Color.rgb(45, 45, 45))
+        }
+        layout.addView(
+            promptInput,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, dp(12))
+            }
+        )
+
         enhanceButton = Button(this).apply {
-            text = "Enhance Photo"
+            text = "Enhance Photo with Cloud AI"
         }
         layout.addView(enhanceButton)
 
@@ -194,16 +210,17 @@ class MainActivity : Activity() {
             textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
+            setPadding(dp(4), dp(12), dp(4), dp(12))
         }
         layout.addView(statusText)
 
         testAiButton = Button(this).apply {
-            text = "Test AI Model"
+            text = "Test Cloud AI Connection"
         }
         layout.addView(testAiButton)
 
         testAiButton.setOnClickListener {
-            testAiModel()
+            testCloudConnection()
         }
 
         saveButton = Button(this).apply {
@@ -221,13 +238,13 @@ class MainActivity : Activity() {
                     "Please upload a photo first",
                     Toast.LENGTH_SHORT
                 ).show()
-            } else if (!isProcessing && !isSaving && !isModelTesting) {
+            } else if (!isBusy()) {
                 enhancePhoto(uri)
             }
         }
 
         saveButton.setOnClickListener {
-            if (!isProcessing && !isSaving && !isModelTesting) {
+            if (!isBusy()) {
                 saveEnhancedPhoto()
             }
         }
@@ -239,116 +256,8 @@ class MainActivity : Activity() {
         statusText.text = "Upload a photo to get started"
     }
 
-    // REAL AI MODEL TEST
-
-    private fun testAiModel() {
-        if (isModelTesting || isProcessing || isSaving) return
-
-        isModelTesting = true
-        setControlsEnabled(false)
-
-        statusText.text = "Testing Real-ESRGAN AI model..."
-
-        executor.execute {
-            var environment: LiteRtEnvironment? = null
-            var model: CompiledModel? = null
-
-            var inputs: List<TensorBuffer> = emptyList()
-            var outputs: List<TensorBuffer> = emptyList()
-
-            var resultMessage: String
-
-            try {
-                environment = Tasks.await(
-                    LiteRt.initialize(applicationContext)
-                )
-
-                model = CompiledModel.create(
-                    assets,
-                    modelFile,
-                    CompiledModel.Options(Accelerator.CPU),
-                    environment
-                )
-
-                inputs = model.createInputBuffers()
-                outputs = model.createOutputBuffers()
-
-                if (inputs.size != 1 || outputs.size != 1) {
-                    throw Exception(
-                        "Unexpected model tensor count. " +
-                            "Inputs: ${inputs.size}, outputs: ${outputs.size}"
-                    )
-                }
-
-                val testInput = FloatArray(INPUT_ELEMENTS) {
-                    0.5f
-                }
-
-                inputs[0].writeFloat(testInput)
-                model.run(inputs, outputs)
-
-                val testOutput = outputs[0].readFloat()
-
-                if (testOutput.size != OUTPUT_ELEMENTS) {
-                    throw Exception(
-                        "Unexpected output size: ${testOutput.size}. " +
-                            "Expected: $OUTPUT_ELEMENTS"
-                    )
-                }
-
-                if (testOutput.any {
-                    it.isNaN() || it.isInfinite()
-                }) {
-                    throw Exception("Model produced invalid output values")
-                }
-
-                resultMessage =
-                    "AI MODEL TEST PASSED!\n" +
-                    "Real inference completed successfully.\n" +
-                    "Input: 128 × 128 RGB\n" +
-                    "Output: 512 × 512 RGB\n" +
-                    "4× AI upscaling is ready."
-
-            } catch (e: Exception) {
-                resultMessage =
-                    "AI model test failed:\n" +
-                    (e.message ?: e.javaClass.simpleName)
-
-            } finally {
-                inputs.forEach {
-                    try {
-                        it.close()
-                    } catch (_: Exception) {
-                    }
-                }
-
-                outputs.forEach {
-                    try {
-                        it.close()
-                    } catch (_: Exception) {
-                    }
-                }
-
-                try {
-                    model?.close()
-                } catch (_: Exception) {
-                }
-
-                try {
-                    environment?.close()
-                } catch (_: Exception) {
-                }
-            }
-
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-
-                isModelTesting = false
-                setControlsEnabled(true)
-                statusText.text = resultMessage
-            }
-        }
-    }
+    private fun isBusy(): Boolean =
+        isProcessing || isSaving || isTesting
 
     private fun setControlsEnabled(enabled: Boolean) {
         enhanceButton.isEnabled = enabled
@@ -356,19 +265,32 @@ class MainActivity : Activity() {
         testAiButton.isEnabled = enabled
 
         saveButton.isEnabled =
-            enabled &&
-            enhancedBitmap != null &&
-            !enhancedBitmap!!.isRecycled
+            enabled && enhancedBitmap?.isRecycled == false
 
         compareButton.isEnabled =
-            enabled && enhancedBitmap != null
+            enabled && enhancedBitmap?.isRecycled == false
 
         strengthButtons.values.forEach {
             it.isEnabled = enabled
         }
+
+        promptInput.isEnabled = enabled
     }
 
-    // DISPLAY PHOTO
+    private fun updateStrengthButtons() {
+        strengthText.text = "Selected: $selectedStrength"
+
+        strengthButtons.forEach { (strength, button) ->
+            val selected = strength == selectedStrength
+
+            button.text =
+                if (selected) "✓ $strength" else strength
+
+            button.setTextColor(
+                if (selected) Color.GREEN else Color.WHITE
+            )
+        }
+    }
 
     private fun displayCurrentPhoto() {
         if (isShowingEnhanced) {
@@ -390,21 +312,6 @@ class MainActivity : Activity() {
         photoView.resetZoom()
     }
 
-    private fun updateStrengthButtons() {
-        strengthText.text = "Selected: $selectedStrength"
-
-        strengthButtons.forEach { (strength, button) ->
-            val selected = strength == selectedStrength
-
-            button.text =
-                if (selected) "✓ $strength" else strength
-
-            button.setTextColor(
-                if (selected) Color.GREEN else Color.WHITE
-            )
-        }
-    }
-
     private fun readPhotoBytes(uri: Uri): ByteArray {
         val stream = contentResolver.openInputStream(uri)
             ?: throw Exception("Cannot open selected photo")
@@ -414,84 +321,216 @@ class MainActivity : Activity() {
         }
     }
 
-    // REAL-ESRGAN PHOTO ENHANCEMENT
+    // CLOUD AI CONNECTION TEST
+
+    private fun testCloudConnection() {
+        if (isBusy()) return
+
+        isTesting = true
+        setControlsEnabled(false)
+        statusText.text = "Connecting to cloud AI server..."
+
+        executor.execute {
+            var message: String
+
+            try {
+                val connection = URL("$SERVER/health")
+                    .openConnection() as HttpURLConnection
+
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 30000
+                connection.readTimeout = 30000
+
+                try {
+                    val code = connection.responseCode
+
+                    if (code in 200..299) {
+                        message =
+                            "CLOUD SERVER CONNECTED!\n" +
+                            "Server: Online\n" +
+                            "Health endpoint: Healthy\n" +
+                            "Ready for photo enhancement."
+                    } else {
+                        message = "Server returned HTTP $code"
+                    }
+                } finally {
+                    connection.disconnect()
+                }
+
+            } catch (e: Exception) {
+                message =
+                    "Connection failed:\n${e.message}"
+            }
+
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+
+                isTesting = false
+                setControlsEnabled(true)
+                statusText.text = message
+
+                Toast.makeText(
+                    this,
+                    if (message.startsWith("CLOUD SERVER CONNECTED"))
+                        "Cloud server connected!"
+                    else
+                        "Cloud connection failed",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    // SEND PHOTO TO RENDER CLOUD AI
 
     private fun enhancePhoto(uri: Uri) {
-        if (isProcessing || isSaving || isModelTesting) return
+        if (isBusy()) return
 
         isProcessing = true
+
         val strength = selectedStrength
+        val prompt = promptInput.text.toString().trim()
+
+        if (prompt.length > 2000) {
+            isProcessing = false
+            Toast.makeText(
+                this,
+                "Instructions must be 2000 characters or less",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
 
         setControlsEnabled(false)
-        statusText.text = "Preparing photo for AI enhancement..."
+        statusText.text = "Preparing photo for cloud AI..."
 
         executor.execute {
             var result: Bitmap? = null
 
             try {
-                val bytes = readPhotoBytes(uri)
+                val imageBytes = readPhotoBytes(uri)
 
-                val bounds = BitmapFactory.Options().apply {
-                    inJustDecodeBounds = true
+                if (imageBytes.isEmpty()) {
+                    throw Exception("Selected photo is empty")
                 }
 
-                BitmapFactory.decodeByteArray(
-                    bytes,
-                    0,
-                    bytes.size,
-                    bounds
+                if (imageBytes.size > MAX_UPLOAD_SIZE) {
+                    throw Exception(
+                        "Photo exceeds the 20 MB server upload limit"
+                    )
+                }
+
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        statusText.text =
+                            "Uploading photo to cloud AI..."
+                    }
+                }
+
+                val boundary = "----PhotoEnhancer${UUID.randomUUID()}"
+
+                val connection = URL("$SERVER/enhance")
+                    .openConnection() as HttpURLConnection
+
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 60000
+                connection.readTimeout = 240000
+                connection.doOutput = true
+                connection.useCaches = false
+
+                connection.setRequestProperty(
+                    "Content-Type",
+                    "multipart/form-data; boundary=$boundary"
                 )
 
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    throw Exception("Invalid photo")
-                }
-
-                var sample = 1
-
-                while (
-                    bounds.outWidth / sample > MAX_INPUT_DIMENSION ||
-                    bounds.outHeight / sample > MAX_INPUT_DIMENSION
-                ) {
-                    sample *= 2
-                }
-
-                val options = BitmapFactory.Options().apply {
-                    inSampleSize = sample
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-
-                val source = BitmapFactory.decodeByteArray(
-                    bytes,
-                    0,
-                    bytes.size,
-                    options
-                ) ?: throw Exception("Could not decode photo")
+                connection.setRequestProperty(
+                    "Accept",
+                    "image/png"
+                )
 
                 try {
+                    connection.outputStream.use { output ->
+                        fun writeText(value: String) {
+                            output.write(value.toByteArray(Charsets.UTF_8))
+                        }
+
+                        writeText("--$boundary\r\n")
+                        writeText(
+                            "Content-Disposition: form-data; " +
+                                "name=\"strength\"\r\n\r\n"
+                        )
+                        writeText("$strength\r\n")
+
+                        writeText("--$boundary\r\n")
+                        writeText(
+                            "Content-Disposition: form-data; " +
+                                "name=\"prompt\"\r\n\r\n"
+                        )
+                        writeText("$prompt\r\n")
+
+                        writeText("--$boundary\r\n")
+                        writeText(
+                            "Content-Disposition: form-data; " +
+                                "name=\"image\"; filename=\"photo.jpg\"\r\n"
+                        )
+                        writeText("Content-Type: image/jpeg\r\n\r\n")
+
+                        output.write(imageBytes)
+                        writeText("\r\n--$boundary--\r\n")
+                        output.flush()
+                    }
+
                     runOnUiThread {
                         if (!isFinishing && !isDestroyed) {
                             statusText.text =
-                                "Running overlapping Real-ESRGAN AI tiles..."
+                                "Cloud AI is enhancing your photo..."
                         }
                     }
 
-                    result = runRealEsrgan(source, strength) {
-                            completed, total ->
+                    val responseCode = connection.responseCode
 
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
-                                statusText.text =
-                                    "AI processing tile $completed of $total..."
-                            }
+                    if (responseCode !in 200..299) {
+                        val errorText = try {
+                            connection.errorStream
+                                ?.bufferedReader()
+                                ?.use { it.readText() }
+                        } catch (_: Exception) {
+                            null
                         }
+
+                        throw Exception(
+                            "Server error HTTP $responseCode: " +
+                                (errorText ?: "Unknown server error")
+                        )
                     }
+
+                    val responseType =
+                        connection.contentType ?: ""
+
+                    if (!responseType.contains("image/png", true)) {
+                        throw Exception(
+                            "Server did not return a PNG image"
+                        )
+                    }
+
+                    val outputBytes = connection.inputStream.use {
+                        it.readBytes()
+                    }
+
+                    result = BitmapFactory.decodeByteArray(
+                        outputBytes,
+                        0,
+                        outputBytes.size
+                    ) ?: throw Exception(
+                        "Could not decode the enhanced image"
+                    )
 
                 } finally {
-                    source.recycle()
+                    connection.disconnect()
                 }
 
                 val completed = result
-                    ?: throw Exception("AI did not produce an image")
+                    ?: throw Exception("No enhanced image received")
 
                 runOnUiThread {
                     if (isFinishing || isDestroyed) {
@@ -500,9 +539,7 @@ class MainActivity : Activity() {
                     }
 
                     enhancedBitmap?.let {
-                        if (!it.isRecycled) {
-                            it.recycle()
-                        }
+                        if (!it.isRecycled) it.recycle()
                     }
 
                     enhancedBitmap = completed
@@ -514,11 +551,11 @@ class MainActivity : Activity() {
                     setControlsEnabled(true)
 
                     statusText.text =
-                        "AI enhancement complete! 4× upscale ($strength)."
+                        "Cloud AI enhancement complete! ($strength)"
 
                     Toast.makeText(
                         this,
-                        "AI enhanced photo is ready!",
+                        "Enhanced photo received from cloud AI!",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -527,9 +564,7 @@ class MainActivity : Activity() {
 
             } catch (e: Exception) {
                 result?.let {
-                    if (!it.isRecycled) {
-                        it.recycle()
-                    }
+                    if (!it.isRecycled) it.recycle()
                 }
 
                 runOnUiThread {
@@ -539,431 +574,16 @@ class MainActivity : Activity() {
                     setControlsEnabled(true)
 
                     statusText.text =
-                        "AI enhancement failed: ${e.message}"
+                        "Cloud enhancement failed:\n${e.message}"
 
                     Toast.makeText(
                         this,
-                        "AI enhancement failed",
+                        "Cloud enhancement failed",
                         Toast.LENGTH_LONG
                     ).show()
                 }
             }
         }
-    }
-
-    // CREATE OVERLAPPING TILE POSITIONS
-
-    private fun createTileStarts(length: Int): List<Int> {
-        if (length <= TILE_SIZE) {
-            return listOf(0)
-        }
-
-        val starts = mutableListOf(0)
-
-        while (true) {
-            val next = starts.last() + TILE_STRIDE
-
-            if (next + TILE_SIZE >= length) {
-                val finalStart = (length - TILE_SIZE).coerceAtLeast(0)
-
-                if (finalStart > starts.last()) {
-                    starts.add(finalStart)
-                }
-
-                break
-            }
-
-            starts.add(next)
-        }
-
-        return starts
-    }
-
-    // REAL-ESRGAN OVERLAPPING TILE INFERENCE ENGINE
-
-    private fun runRealEsrgan(
-        source: Bitmap,
-        strength: String,
-        progress: (Int, Int) -> Unit
-    ): Bitmap {
-
-        var environment: LiteRtEnvironment? = null
-        var model: CompiledModel? = null
-
-        var inputBuffers: List<TensorBuffer> = emptyList()
-        var outputBuffers: List<TensorBuffer> = emptyList()
-
-        var resultBitmap: Bitmap? = null
-
-        try {
-            environment = Tasks.await(
-                LiteRt.initialize(applicationContext)
-            )
-
-            model = CompiledModel.create(
-                assets,
-                modelFile,
-                CompiledModel.Options(Accelerator.CPU),
-                environment
-            )
-
-            inputBuffers = model.createInputBuffers()
-            outputBuffers = model.createOutputBuffers()
-
-            if (inputBuffers.size != 1 || outputBuffers.size != 1) {
-                throw Exception("Unexpected AI model tensor count")
-            }
-
-            val inputBuffer = inputBuffers[0]
-            val outputBuffer = outputBuffers[0]
-
-            val width = source.width
-            val height = source.height
-
-            val outputWidth = width * 4
-            val outputHeight = height * 4
-
-            val sourcePixels = IntArray(width * height)
-
-            source.getPixels(
-                sourcePixels,
-                0,
-                width,
-                0,
-                0,
-                width,
-                height
-            )
-
-            val destination = Bitmap.createBitmap(
-                outputWidth,
-                outputHeight,
-                Bitmap.Config.ARGB_8888
-            )
-
-            resultBitmap = destination
-
-            val inputData = FloatArray(INPUT_ELEMENTS)
-
-            val xStarts = createTileStarts(width)
-            val yStarts = createTileStarts(height)
-
-            val totalTiles = xStarts.size * yStarts.size
-            var tileNumber = 0
-
-            val contrast = when (strength) {
-                "Low" -> 0.98f
-                "High" -> 1.06f
-                "Ultra" -> 1.09f
-                else -> 1.02f
-            }
-
-            val saturation = when (strength) {
-                "Low" -> 1.00f
-                "High" -> 1.08f
-                "Ultra" -> 1.12f
-                else -> 1.04f
-            }
-
-            for (yIndex in yStarts.indices) {
-                val tileY = yStarts[yIndex]
-
-                for (xIndex in xStarts.indices) {
-                    val tileX = xStarts[xIndex]
-
-                    for (y in 0 until TILE_SIZE) {
-                        for (x in 0 until TILE_SIZE) {
-
-                            val sourceX =
-                                (tileX + x).coerceAtMost(width - 1)
-
-                            val sourceY =
-                                (tileY + y).coerceAtMost(height - 1)
-
-                            val pixel =
-                                sourcePixels[sourceY * width + sourceX]
-
-                            var r = Color.red(pixel) / 255f
-                            var g = Color.green(pixel) / 255f
-                            var b = Color.blue(pixel) / 255f
-
-                            r = (
-                                (r - 0.5f) * contrast + 0.5f
-                            ).coerceIn(0f, 1f)
-
-                            g = (
-                                (g - 0.5f) * contrast + 0.5f
-                            ).coerceIn(0f, 1f)
-
-                            b = (
-                                (b - 0.5f) * contrast + 0.5f
-                            ).coerceIn(0f, 1f)
-
-                            val gray =
-                                0.299f * r +
-                                0.587f * g +
-                                0.114f * b
-
-                            r = (
-                                gray + (r - gray) * saturation
-                            ).coerceIn(0f, 1f)
-
-                            g = (
-                                gray + (g - gray) * saturation
-                            ).coerceIn(0f, 1f)
-
-                            b = (
-                                gray + (b - gray) * saturation
-                            ).coerceIn(0f, 1f)
-
-                            val index =
-                                (y * TILE_SIZE + x) * CHANNELS
-
-                            inputData[index] = r
-                            inputData[index + 1] = g
-                            inputData[index + 2] = b
-                        }
-                    }
-
-                    inputBuffer.writeFloat(inputData)
-                    model.run(inputBuffers, outputBuffers)
-
-                    val aiOutput = outputBuffer.readFloat()
-
-                    if (aiOutput.size != OUTPUT_ELEMENTS) {
-                        throw Exception(
-                            "Unexpected AI output size: ${aiOutput.size}. " +
-                                "Expected: $OUTPUT_ELEMENTS"
-                        )
-                    }
-
-                    val tilePixels = IntArray(
-                        OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE
-                    )
-
-                    for (y in 0 until OUTPUT_TILE_SIZE) {
-                        for (x in 0 until OUTPUT_TILE_SIZE) {
-
-                            val index =
-                                (y * OUTPUT_TILE_SIZE + x) * CHANNELS
-
-                            val r = (
-                                aiOutput[index] * 255f
-                            ).roundToInt().coerceIn(0, 255)
-
-                            val g = (
-                                aiOutput[index + 1] * 255f
-                            ).roundToInt().coerceIn(0, 255)
-
-                            val b = (
-                                aiOutput[index + 2] * 255f
-                            ).roundToInt().coerceIn(0, 255)
-
-                            tilePixels[
-                                y * OUTPUT_TILE_SIZE + x
-                            ] = Color.rgb(r, g, b)
-                        }
-                    }
-
-                    val cropLeft = if (xIndex == 0) {
-                        0
-                    } else {
-                        (
-                            xStarts[xIndex - 1] + TILE_SIZE - tileX
-                        ) / 2
-                    }.coerceIn(0, TILE_SIZE)
-
-                    val cropTop = if (yIndex == 0) {
-                        0
-                    } else {
-                        (
-                            yStarts[yIndex - 1] + TILE_SIZE - tileY
-                        ) / 2
-                    }.coerceIn(0, TILE_SIZE)
-
-                    val cropRight = if (xIndex == xStarts.lastIndex) {
-                        minOf(TILE_SIZE, width - tileX)
-                    } else {
-                        (
-                            tileX + TILE_SIZE + xStarts[xIndex + 1]
-                        ) / 2 - tileX
-                    }.coerceIn(cropLeft, TILE_SIZE)
-
-                    val cropBottom = if (yIndex == yStarts.lastIndex) {
-                        minOf(TILE_SIZE, height - tileY)
-                    } else {
-                        (
-                            tileY + TILE_SIZE + yStarts[yIndex + 1]
-                        ) / 2 - tileY
-                    }.coerceIn(cropTop, TILE_SIZE)
-
-                    val copyWidth = (cropRight - cropLeft) * 4
-                    val copyHeight = (cropBottom - cropTop) * 4
-
-                    if (copyWidth > 0 && copyHeight > 0) {
-                        val outputOffset =
-                            cropTop * 4 * OUTPUT_TILE_SIZE +
-                            cropLeft * 4
-
-                        destination.setPixels(
-                            tilePixels,
-                            outputOffset,
-                            OUTPUT_TILE_SIZE,
-                            (tileX + cropLeft) * 4,
-                            (tileY + cropTop) * 4,
-                            copyWidth,
-                            copyHeight
-                        )
-                    }
-
-                    tileNumber++
-                    progress(tileNumber, totalTiles)
-                }
-            }
-
-            // NEW: APPLY STRONGER DETAIL SHARPENING
-
-            val sharpened = applySharpening(
-                destination,
-                strength
-            )
-
-            destination.recycle()
-            resultBitmap = null
-
-            return sharpened
-
-        } catch (e: Exception) {
-            resultBitmap?.let {
-                if (!it.isRecycled) {
-                    it.recycle()
-                }
-            }
-
-            throw e
-
-        } finally {
-            inputBuffers.forEach {
-                try {
-                    it.close()
-                } catch (_: Exception) {
-                }
-            }
-
-            outputBuffers.forEach {
-                try {
-                    it.close()
-                } catch (_: Exception) {
-                }
-            }
-
-            try {
-                model?.close()
-            } catch (_: Exception) {
-            }
-
-            try {
-                environment?.close()
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    // STRONGER POST-AI SHARPENING ENGINE
-
-    private fun applySharpening(
-        bitmap: Bitmap,
-        strength: String
-    ): Bitmap {
-
-        val amount = when (strength) {
-            "Low" -> 0.25f
-            "Balanced" -> 0.55f
-            "High" -> 0.85f
-            "Ultra" -> 1.10f
-            else -> 0.55f
-        }
-
-        val width = bitmap.width
-        val height = bitmap.height
-
-        val pixels = IntArray(width * height)
-
-        bitmap.getPixels(
-            pixels,
-            0,
-            width,
-            0,
-            0,
-            width,
-            height
-        )
-
-        val output = Bitmap.createBitmap(
-            width,
-            height,
-            Bitmap.Config.ARGB_8888
-        )
-
-        val row = IntArray(width)
-
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-
-                val center = pixels[y * width + x]
-
-                var redSum = 0
-                var greenSum = 0
-                var blueSum = 0
-
-                for (dy in -1..1) {
-                    for (dx in -1..1) {
-
-                        val px = (x + dx).coerceIn(0, width - 1)
-                        val py = (y + dy).coerceIn(0, height - 1)
-
-                        val pixel = pixels[py * width + px]
-
-                        redSum += Color.red(pixel)
-                        greenSum += Color.green(pixel)
-                        blueSum += Color.blue(pixel)
-                    }
-                }
-
-                val blurRed = redSum / 9f
-                val blurGreen = greenSum / 9f
-                val blurBlue = blueSum / 9f
-
-                val r = (
-                    Color.red(center) +
-                        amount * (Color.red(center) - blurRed)
-                    ).roundToInt().coerceIn(0, 255)
-
-                val g = (
-                    Color.green(center) +
-                        amount * (Color.green(center) - blurGreen)
-                    ).roundToInt().coerceIn(0, 255)
-
-                val b = (
-                    Color.blue(center) +
-                        amount * (Color.blue(center) - blurBlue)
-                    ).roundToInt().coerceIn(0, 255)
-
-                row[x] = Color.rgb(r, g, b)
-            }
-
-            output.setPixels(
-                row,
-                0,
-                width,
-                0,
-                y,
-                width,
-                1
-            )
-        }
-
-        return output
     }
 
     // SAVE ENHANCED PHOTO
@@ -980,11 +600,10 @@ class MainActivity : Activity() {
             return
         }
 
-        if (isProcessing || isSaving || isModelTesting) return
+        if (isBusy()) return
 
         isSaving = true
         setControlsEnabled(false)
-
         statusText.text = "Saving enhanced photo..."
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -997,18 +616,15 @@ class MainActivity : Activity() {
                             MediaStore.Images.Media.DISPLAY_NAME,
                             "Enhanced_${System.currentTimeMillis()}.jpg"
                         )
-
                         put(
                             MediaStore.Images.Media.MIME_TYPE,
                             "image/jpeg"
                         )
-
                         put(
                             MediaStore.Images.Media.RELATIVE_PATH,
                             Environment.DIRECTORY_PICTURES +
                                 "/Private Photo Enhancer"
                         )
-
                         put(
                             MediaStore.Images.Media.IS_PENDING,
                             1
@@ -1056,9 +672,7 @@ class MainActivity : Activity() {
 
                         isSaving = false
                         setControlsEnabled(true)
-
-                        statusText.text =
-                            "Photo saved to your gallery!"
+                        statusText.text = "Photo saved to your gallery!"
 
                         Toast.makeText(
                             this,
@@ -1077,18 +691,14 @@ class MainActivity : Activity() {
 
                         isSaving = false
                         setControlsEnabled(true)
-
-                        statusText.text =
-                            "Save failed: ${e.message}"
+                        statusText.text = "Save failed: ${e.message}"
                     }
                 }
             }
-
         } else {
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "image/jpeg"
-
                 putExtra(
                     Intent.EXTRA_TITLE,
                     "Enhanced_Photo.jpg"
@@ -1132,7 +742,6 @@ class MainActivity : Activity() {
 
                     isSaving = false
                     setControlsEnabled(true)
-
                     statusText.text = "Photo saved successfully!"
 
                     Toast.makeText(
@@ -1148,15 +757,13 @@ class MainActivity : Activity() {
 
                     isSaving = false
                     setControlsEnabled(true)
-
-                    statusText.text =
-                        "Save failed: ${e.message}"
+                    statusText.text = "Save failed: ${e.message}"
                 }
             }
         }
     }
 
-    // PHOTO UPLOAD AND SAVE RESULT HANDLING
+    // PHOTO SELECTION AND SAVE RESULT
 
     @Suppress("DEPRECATION")
     override fun onActivityResult(
@@ -1164,11 +771,7 @@ class MainActivity : Activity() {
         resultCode: Int,
         data: Intent?
     ) {
-        super.onActivityResult(
-            requestCode,
-            resultCode,
-            data
-        )
+        super.onActivityResult(requestCode, resultCode, data)
 
         if (requestCode == PICK_IMAGE && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
@@ -1177,19 +780,14 @@ class MainActivity : Activity() {
                 val flags =
                     data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
 
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    flags
-                )
+                contentResolver.takePersistableUriPermission(uri, flags)
             } catch (_: Exception) {
             }
 
             selectedImage = uri
 
             enhancedBitmap?.let {
-                if (!it.isRecycled) {
-                    it.recycle()
-                }
+                if (!it.isRecycled) it.recycle()
             }
 
             enhancedBitmap = null
@@ -1204,7 +802,7 @@ class MainActivity : Activity() {
             saveButton.isEnabled = false
 
             statusText.text =
-                "Original photo loaded. Ready for AI enhancement!"
+                "Original photo loaded. Ready for cloud AI enhancement!"
 
             return
         }
@@ -1236,13 +834,10 @@ class MainActivity : Activity() {
         }
 
         enhancedBitmap?.let {
-            if (!it.isRecycled) {
-                it.recycle()
-            }
+            if (!it.isRecycled) it.recycle()
         }
 
         enhancedBitmap = null
-
         super.onDestroy()
     }
 }
@@ -1284,11 +879,11 @@ class ZoomableImageView(
                         (currentScale * detector.scaleFactor)
                             .coerceIn(1f, maximumZoom)
 
-                    val actualFactor = newScale / currentScale
+                    val factor = newScale / currentScale
 
                     displayMatrix.postScale(
-                        actualFactor,
-                        actualFactor,
+                        factor,
+                        factor,
                         detector.focusX,
                         detector.focusY
                     )
