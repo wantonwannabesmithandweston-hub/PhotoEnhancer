@@ -67,12 +67,15 @@ class MainActivity : Activity() {
         private const val TILE_SIZE = 128
         private const val OUTPUT_TILE_SIZE = 512
         private const val CHANNELS = 3
+        private const val TILE_STRIDE = 96
 
         private const val INPUT_ELEMENTS =
             TILE_SIZE * TILE_SIZE * CHANNELS
 
         private const val OUTPUT_ELEMENTS =
             OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE * CHANNELS
+
+        private const val MAX_INPUT_DIMENSION = 768
     }
 
     private fun dp(value: Int): Int =
@@ -166,7 +169,7 @@ class MainActivity : Activity() {
         }
         layout.addView(strengthText)
 
-        listOf("Low", "Balanced", "High").forEach { strength ->
+        listOf("Low", "Balanced", "High", "Ultra").forEach { strength ->
             val button = Button(this).apply {
                 text = strength
             }
@@ -237,7 +240,6 @@ class MainActivity : Activity() {
     }
 
     // REAL AI MODEL TEST
-    // This performs an actual model inference, not just a load test.
 
     private fun testAiModel() {
         if (isModelTesting || isProcessing || isSaving) return
@@ -274,40 +276,30 @@ class MainActivity : Activity() {
                 if (inputs.size != 1 || outputs.size != 1) {
                     throw Exception(
                         "Unexpected model tensor count. " +
-                        "Inputs: ${inputs.size}, outputs: ${outputs.size}"
+                            "Inputs: ${inputs.size}, outputs: ${outputs.size}"
                     )
                 }
-
-                // The inspected model expects:
-                // [1, 128, 128, 3] RGB NHWC float32.
 
                 val testInput = FloatArray(INPUT_ELEMENTS) {
                     0.5f
                 }
 
                 inputs[0].writeFloat(testInput)
-
-                // Run actual AI inference.
                 model.run(inputs, outputs)
-
-                // The inspected model produces:
-                // [1, 512, 512, 3] RGB NHWC float32.
 
                 val testOutput = outputs[0].readFloat()
 
                 if (testOutput.size != OUTPUT_ELEMENTS) {
                     throw Exception(
                         "Unexpected output size: ${testOutput.size}. " +
-                        "Expected: $OUTPUT_ELEMENTS"
+                            "Expected: $OUTPUT_ELEMENTS"
                     )
                 }
 
                 if (testOutput.any {
                     it.isNaN() || it.isInfinite()
                 }) {
-                    throw Exception(
-                        "Model produced invalid output values"
-                    )
+                    throw Exception("Model produced invalid output values")
                 }
 
                 resultMessage =
@@ -457,8 +449,8 @@ class MainActivity : Activity() {
                 var sample = 1
 
                 while (
-                    bounds.outWidth / sample > 768 ||
-                    bounds.outHeight / sample > 768
+                    bounds.outWidth / sample > MAX_INPUT_DIMENSION ||
+                    bounds.outHeight / sample > MAX_INPUT_DIMENSION
                 ) {
                     sample *= 2
                 }
@@ -479,7 +471,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (!isFinishing && !isDestroyed) {
                             statusText.text =
-                                "Running Real-ESRGAN AI enhancement..."
+                                "Running overlapping Real-ESRGAN AI tiles..."
                         }
                     }
 
@@ -522,8 +514,7 @@ class MainActivity : Activity() {
                     setControlsEnabled(true)
 
                     statusText.text =
-                        "Real-ESRGAN AI enhancement complete! " +
-                        "4× upscale ($strength)"
+                        "AI enhancement complete! 4× upscale ($strength)."
 
                     Toast.makeText(
                         this,
@@ -560,13 +551,42 @@ class MainActivity : Activity() {
         }
     }
 
-    // REAL-ESRGAN TILE INFERENCE ENGINE
+    // CREATE OVERLAPPING TILE POSITIONS
+
+    private fun createTileStarts(length: Int): List<Int> {
+        if (length <= TILE_SIZE) {
+            return listOf(0)
+        }
+
+        val starts = mutableListOf(0)
+
+        while (true) {
+            val next = starts.last() + TILE_STRIDE
+
+            if (next + TILE_SIZE >= length) {
+                val finalStart = (length - TILE_SIZE).coerceAtLeast(0)
+
+                if (finalStart > starts.last()) {
+                    starts.add(finalStart)
+                }
+
+                break
+            }
+
+            starts.add(next)
+        }
+
+        return starts
+    }
+
+    // REAL-ESRGAN OVERLAPPING TILE INFERENCE ENGINE
     //
-    // Verified model input:
-    // [1, 128, 128, 3] NHWC RGB float32
+    // Input: 128 × 128 × 3 RGB float
+    // Output: 512 × 512 × 3 RGB float
     //
-    // Verified model output:
-    // [1, 512, 512, 3] NHWC RGB float32
+    // Tiles overlap by 32 input pixels.
+    // Only the central, non-overlapping portions are copied.
+    // This helps reduce visible tile boundaries.
 
     private fun runRealEsrgan(
         source: Bitmap,
@@ -630,34 +650,35 @@ class MainActivity : Activity() {
 
             resultBitmap = destination
 
-            // NHWC input: RGB RGB RGB...
             val inputData = FloatArray(INPUT_ELEMENTS)
 
-            // NHWC output: RGB RGB RGB...
-            val expectedOutputSize = OUTPUT_ELEMENTS
+            val xStarts = createTileStarts(width)
+            val yStarts = createTileStarts(height)
 
-            val totalTiles =
-                ((width + TILE_SIZE - 1) / TILE_SIZE) *
-                ((height + TILE_SIZE - 1) / TILE_SIZE)
-
+            val totalTiles = xStarts.size * yStarts.size
             var tileNumber = 0
 
             val contrast = when (strength) {
                 "Low" -> 0.98f
                 "High" -> 1.06f
+                "Ultra" -> 1.09f
                 else -> 1.02f
             }
 
             val saturation = when (strength) {
                 "Low" -> 1.00f
                 "High" -> 1.08f
+                "Ultra" -> 1.12f
                 else -> 1.04f
             }
 
-            for (tileY in 0 until height step TILE_SIZE) {
-                for (tileX in 0 until width step TILE_SIZE) {
+            for (yIndex in yStarts.indices) {
+                val tileY = yStarts[yIndex]
 
-                    // Prepare one 128 × 128 RGB input tile.
+                for (xIndex in xStarts.indices) {
+                    val tileX = xStarts[xIndex]
+
+                    // Prepare the 128 × 128 RGB input tile.
 
                     for (y in 0 until TILE_SIZE) {
                         for (x in 0 until TILE_SIZE) {
@@ -675,7 +696,7 @@ class MainActivity : Activity() {
                             var g = Color.green(pixel) / 255f
                             var b = Color.blue(pixel) / 255f
 
-                            // Strength adjustment before AI inference.
+                            // Apply selected strength before inference.
 
                             r = (
                                 (r - 0.5f) * contrast + 0.5f
@@ -706,9 +727,6 @@ class MainActivity : Activity() {
                                 gray + (b - gray) * saturation
                             ).coerceIn(0f, 1f)
 
-                            // NHWC indexing:
-                            // pixel index * 3 + channel.
-
                             val index =
                                 (y * TILE_SIZE + x) * CHANNELS
 
@@ -718,24 +736,21 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    // Send NHWC RGB input to the model.
+                    // Run AI inference.
 
                     inputBuffer.writeFloat(inputData)
-
-                    // Run actual Real-ESRGAN inference.
-
                     model.run(inputBuffers, outputBuffers)
 
                     val aiOutput = outputBuffer.readFloat()
 
-                    if (aiOutput.size != expectedOutputSize) {
+                    if (aiOutput.size != OUTPUT_ELEMENTS) {
                         throw Exception(
                             "Unexpected AI output size: ${aiOutput.size}. " +
-                            "Expected: $expectedOutputSize"
+                                "Expected: $OUTPUT_ELEMENTS"
                         )
                     }
 
-                    // Convert NHWC RGB output to Android bitmap pixels.
+                    // Convert model output into bitmap pixels.
 
                     val tilePixels = IntArray(
                         OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE
@@ -765,23 +780,59 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    // Only copy the valid part of edge tiles.
+                    // Calculate crop boundaries between overlapping tiles.
+                    // This keeps each output area from being written twice.
 
-                    val validWidth =
-                        minOf(TILE_SIZE, width - tileX) * 4
+                    val cropLeft = if (xIndex == 0) {
+                        0
+                    } else {
+                        (
+                            xStarts[xIndex - 1] + TILE_SIZE - tileX
+                        ) / 2
+                    }.coerceIn(0, TILE_SIZE)
 
-                    val validHeight =
-                        minOf(TILE_SIZE, height - tileY) * 4
+                    val cropTop = if (yIndex == 0) {
+                        0
+                    } else {
+                        (
+                            yStarts[yIndex - 1] + TILE_SIZE - tileY
+                        ) / 2
+                    }.coerceIn(0, TILE_SIZE)
 
-                    destination.setPixels(
-                        tilePixels,
-                        0,
-                        OUTPUT_TILE_SIZE,
-                        tileX * 4,
-                        tileY * 4,
-                        validWidth,
-                        validHeight
-                    )
+                    val cropRight = if (xIndex == xStarts.lastIndex) {
+                        minOf(TILE_SIZE, width - tileX)
+                    } else {
+                        (
+                            tileX + TILE_SIZE + xStarts[xIndex + 1]
+                        ) / 2 - tileX
+                    }.coerceIn(cropLeft, TILE_SIZE)
+
+                    val cropBottom = if (yIndex == yStarts.lastIndex) {
+                        minOf(TILE_SIZE, height - tileY)
+                    } else {
+                        (
+                            tileY + TILE_SIZE + yStarts[yIndex + 1]
+                        ) / 2 - tileY
+                    }.coerceIn(cropTop, TILE_SIZE)
+
+                    val copyWidth = (cropRight - cropLeft) * 4
+                    val copyHeight = (cropBottom - cropTop) * 4
+
+                    if (copyWidth > 0 && copyHeight > 0) {
+                        val outputOffset =
+                            cropTop * 4 * OUTPUT_TILE_SIZE +
+                            cropLeft * 4
+
+                        destination.setPixels(
+                            tilePixels,
+                            outputOffset,
+                            OUTPUT_TILE_SIZE,
+                            (tileX + cropLeft) * 4,
+                            (tileY + cropTop) * 4,
+                            copyWidth,
+                            copyHeight
+                        )
+                    }
 
                     tileNumber++
                     progress(tileNumber, totalTiles)
