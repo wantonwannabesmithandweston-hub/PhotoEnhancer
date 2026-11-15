@@ -1,4 +1,3 @@
-
 package com.privatephoto.enhancer
 
 import android.app.Activity
@@ -622,6 +621,23 @@ class MainActivity : Activity() {
                 (settings.noiseReduction + 0.20f).coerceAtMost(0.65f)
         }
 
+        // Keep custom settings within safe ranges.
+        settings.brightness =
+            settings.brightness.coerceIn(-0.30f, 0.30f)
+        settings.contrast =
+            settings.contrast.coerceIn(0.75f, 1.55f)
+        settings.saturation =
+            settings.saturation.coerceIn(0f, 1.60f)
+        settings.warmth =
+            settings.warmth.coerceIn(-0.25f, 0.25f)
+        settings.sharpen =
+            settings.sharpen.coerceIn(0f, 1.5f)
+        settings.noiseReduction =
+            settings.noiseReduction.coerceIn(0f, 0.70f)
+
+        return settings
+    }
+
     private fun applyLocalEditing(
         source: Bitmap,
         settings: EditSettings
@@ -679,7 +695,6 @@ class MainActivity : Activity() {
                     abs(r - nr) + abs(g - ng) + abs(b - nb)
                 ) / 3f
 
-                // Protect edges while reducing noise in smooth areas.
                 val edgeProtection =
                     (1f - difference / 48f).coerceIn(0f, 1f)
 
@@ -689,7 +704,6 @@ class MainActivity : Activity() {
                 val cleanG = g + (ng - g) * denoise
                 val cleanB = b + (nb - b) * denoise
 
-                // Controlled sharpening.
                 val edgeStrength =
                     (difference / 40f).coerceIn(0.15f, 1f)
 
@@ -702,7 +716,6 @@ class MainActivity : Activity() {
                 var outB = cleanB +
                     settings.sharpen * edgeStrength * (cleanB - nb)
 
-                // Contrast and brightness.
                 outR = (outR - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
 
@@ -712,18 +725,16 @@ class MainActivity : Activity() {
                 outB = (outB - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
 
-                // Gentle warmth adjustment.
                 outR += settings.warmth * 100f
                 outB -= settings.warmth * 100f
 
-                // Protect bright highlights from excessive contrast.
                 val luminance =
                     0.299f * outR +
                     0.587f * outG +
                     0.114f * outB
 
                 val highlightProtection =
-                    (1f - ((luminance - 210f) / 45f).coerceIn(0f, 1f))
+                    1f - ((luminance - 210f) / 45f).coerceIn(0f, 1f)
 
                 val gray = luminance
 
@@ -751,9 +762,7 @@ class MainActivity : Activity() {
         }
 
         return output
-    }
-
-    private fun createTileStarts(length: Int): List<Int> {
+    }    private fun createTileStarts(length: Int): List<Int> {
         if (length <= TILE_SIZE) return listOf(0)
 
         val starts = mutableListOf(0)
@@ -1160,9 +1169,7 @@ class MainActivity : Activity() {
                 }
             }
         }
-    }
-
-    private fun saveEnhancedPhoto() {
+    }    private fun saveEnhancedPhoto() {
         val bitmap = enhancedBitmap
 
         if (bitmap == null || bitmap.isRecycled) {
@@ -1620,13 +1627,3 @@ class ZoomableImageView(
         fitImage()
     }
 }
-
-        settings.brightness = settings.brightness.coerceIn(-0.30f, 0.30f)
-        settings.contrast = settings.contrast.coerceIn(0.75f, 1.55f)
-        settings.saturation = settings.saturation.coerceIn(0f, 1.60f)
-        settings.warmth = settings.warmth.coerceIn(-0.25f, 0.25f)
-        settings.sharpen = settings.sharpen.coerceIn(0f, 1.5f)
-        settings.noiseReduction = settings.noiseReduction.coerceIn(0f, 0.70f)
-
-        return settings
-    }
