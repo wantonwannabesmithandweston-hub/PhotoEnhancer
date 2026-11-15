@@ -85,13 +85,13 @@ class MainActivity : Activity() {
         }
         layout.addView(title)
 
-        val hint = TextView(this).apply {
+        val subtitleText = TextView(this).apply {
             text = "Cloud AI Enhancement • Pinch to zoom • Drag to inspect"
             textSize = 13f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
         }
-        layout.addView(hint)
+        layout.addView(subtitleText)
 
         photoView = ZoomableImageView(this).apply {
             setBackgroundColor(Color.rgb(35, 35, 35))
@@ -179,7 +179,7 @@ class MainActivity : Activity() {
         layout.addView(promptLabel)
 
         promptInput = EditText(this).apply {
-            hint = "Example: Improve lighting, sharpen details, reduce noise..."
+            this.hint = "Example: Improve lighting, sharpen details, reduce noise..."
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
             textSize = 16f
