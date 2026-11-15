@@ -34,9 +34,7 @@ import kotlin.math.roundToInt
 class MainActivity : Activity() {
 
     companion object {
-        private const val SERVER =
-            "https://photoenhancer.onrender.com"
-
+        private const val SERVER = "https://photoenhancer.onrender.com"
         private const val PICK_IMAGE = 100
         private const val SAVE_DOCUMENT = 101
         private const val MAX_UPLOAD_SIZE = 20 * 1024 * 1024
@@ -45,7 +43,7 @@ class MainActivity : Activity() {
     private lateinit var photoView: ZoomableImageView
     private lateinit var compareButton: Button
     private lateinit var strengthText: TextView
-    private lateinit var statusText: TextView
+    private lateinit var statusMessageView: TextView
     private lateinit var enhanceButton: Button
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
@@ -117,7 +115,7 @@ class MainActivity : Activity() {
         layout.addView(compareButton)
 
         compareButton.setOnClickListener {
-            if (!isProcessing && !isSaving && enhancedBitmap != null) {
+            if (!isBusy() && enhancedBitmap != null) {
                 isShowingEnhanced = !isShowingEnhanced
                 displayCurrentPhoto()
             }
@@ -191,6 +189,7 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(12), dp(12), dp(12))
             setBackgroundColor(Color.rgb(45, 45, 45))
         }
+
         layout.addView(
             promptInput,
             LinearLayout.LayoutParams(
@@ -206,13 +205,13 @@ class MainActivity : Activity() {
         }
         layout.addView(enhanceButton)
 
-        statusText = TextView(this).apply {
+        statusMessageView = TextView(this).apply {
             textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(12), dp(4), dp(12))
         }
-        layout.addView(statusText)
+        layout.addView(statusMessageView)
 
         testAiButton = Button(this).apply {
             text = "Test Cloud AI Connection"
@@ -253,7 +252,7 @@ class MainActivity : Activity() {
         setContentView(scroll)
 
         updateStrengthButtons()
-        statusText.text = "Upload a photo to get started"
+        statusMessageView.text = "Upload a photo to get started"
     }
 
     private fun isBusy(): Boolean =
@@ -283,8 +282,7 @@ class MainActivity : Activity() {
         strengthButtons.forEach { (strength, button) ->
             val selected = strength == selectedStrength
 
-            button.text =
-                if (selected) "✓ $strength" else strength
+            button.text = if (selected) "✓ $strength" else strength
 
             button.setTextColor(
                 if (selected) Color.GREEN else Color.WHITE
@@ -321,14 +319,12 @@ class MainActivity : Activity() {
         }
     }
 
-    // CLOUD AI CONNECTION TEST
-
     private fun testCloudConnection() {
         if (isBusy()) return
 
         isTesting = true
         setControlsEnabled(false)
-        statusText.text = "Connecting to cloud AI server..."
+        statusMessageView.text = "Connecting to cloud AI server..."
 
         executor.execute {
             var message: String
@@ -358,8 +354,7 @@ class MainActivity : Activity() {
                 }
 
             } catch (e: Exception) {
-                message =
-                    "Connection failed:\n${e.message}"
+                message = "Connection failed:\n${e.message}"
             }
 
             runOnUiThread {
@@ -367,7 +362,7 @@ class MainActivity : Activity() {
 
                 isTesting = false
                 setControlsEnabled(true)
-                statusText.text = message
+                statusMessageView.text = message
 
                 Toast.makeText(
                     this,
@@ -380,8 +375,6 @@ class MainActivity : Activity() {
             }
         }
     }
-
-    // SEND PHOTO TO RENDER CLOUD AI
 
     private fun enhancePhoto(uri: Uri) {
         if (isBusy()) return
@@ -402,7 +395,7 @@ class MainActivity : Activity() {
         }
 
         setControlsEnabled(false)
-        statusText.text = "Preparing photo for cloud AI..."
+        statusMessageView.text = "Preparing photo for cloud AI..."
 
         executor.execute {
             var result: Bitmap? = null
@@ -422,7 +415,7 @@ class MainActivity : Activity() {
 
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
-                        statusText.text =
+                        statusMessageView.text =
                             "Uploading photo to cloud AI..."
                     }
                 }
@@ -443,10 +436,7 @@ class MainActivity : Activity() {
                     "multipart/form-data; boundary=$boundary"
                 )
 
-                connection.setRequestProperty(
-                    "Accept",
-                    "image/png"
-                )
+                connection.setRequestProperty("Accept", "image/png")
 
                 try {
                     connection.outputStream.use { output ->
@@ -482,7 +472,7 @@ class MainActivity : Activity() {
 
                     runOnUiThread {
                         if (!isFinishing && !isDestroyed) {
-                            statusText.text =
+                            statusMessageView.text =
                                 "Cloud AI is enhancing your photo..."
                         }
                     }
@@ -504,8 +494,7 @@ class MainActivity : Activity() {
                         )
                     }
 
-                    val responseType =
-                        connection.contentType ?: ""
+                    val responseType = connection.contentType ?: ""
 
                     if (!responseType.contains("image/png", true)) {
                         throw Exception(
@@ -550,7 +539,7 @@ class MainActivity : Activity() {
                     isProcessing = false
                     setControlsEnabled(true)
 
-                    statusText.text =
+                    statusMessageView.text =
                         "Cloud AI enhancement complete! ($strength)"
 
                     Toast.makeText(
@@ -573,7 +562,7 @@ class MainActivity : Activity() {
                     isProcessing = false
                     setControlsEnabled(true)
 
-                    statusText.text =
+                    statusMessageView.text =
                         "Cloud enhancement failed:\n${e.message}"
 
                     Toast.makeText(
@@ -585,8 +574,6 @@ class MainActivity : Activity() {
             }
         }
     }
-
-    // SAVE ENHANCED PHOTO
 
     private fun saveEnhancedPhoto() {
         val bitmap = enhancedBitmap
@@ -604,7 +591,7 @@ class MainActivity : Activity() {
 
         isSaving = true
         setControlsEnabled(false)
-        statusText.text = "Saving enhanced photo..."
+        statusMessageView.text = "Saving enhanced photo..."
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             executor.execute {
@@ -672,7 +659,8 @@ class MainActivity : Activity() {
 
                         isSaving = false
                         setControlsEnabled(true)
-                        statusText.text = "Photo saved to your gallery!"
+                        statusMessageView.text =
+                            "Photo saved to your gallery!"
 
                         Toast.makeText(
                             this,
@@ -691,7 +679,8 @@ class MainActivity : Activity() {
 
                         isSaving = false
                         setControlsEnabled(true)
-                        statusText.text = "Save failed: ${e.message}"
+                        statusMessageView.text =
+                            "Save failed: ${e.message}"
                     }
                 }
             }
@@ -742,7 +731,7 @@ class MainActivity : Activity() {
 
                     isSaving = false
                     setControlsEnabled(true)
-                    statusText.text = "Photo saved successfully!"
+                    statusMessageView.text = "Photo saved successfully!"
 
                     Toast.makeText(
                         this,
@@ -757,13 +746,11 @@ class MainActivity : Activity() {
 
                     isSaving = false
                     setControlsEnabled(true)
-                    statusText.text = "Save failed: ${e.message}"
+                    statusMessageView.text = "Save failed: ${e.message}"
                 }
             }
         }
     }
-
-    // PHOTO SELECTION AND SAVE RESULT
 
     @Suppress("DEPRECATION")
     override fun onActivityResult(
@@ -801,7 +788,7 @@ class MainActivity : Activity() {
             compareButton.isEnabled = false
             saveButton.isEnabled = false
 
-            statusText.text =
+            statusMessageView.text =
                 "Original photo loaded. Ready for cloud AI enhancement!"
 
             return
@@ -816,12 +803,12 @@ class MainActivity : Activity() {
                 } else {
                     isSaving = false
                     setControlsEnabled(true)
-                    statusText.text = "No save location selected"
+                    statusMessageView.text = "No save location selected"
                 }
             } else {
                 isSaving = false
                 setControlsEnabled(true)
-                statusText.text = "Save cancelled"
+                statusMessageView.text = "Save cancelled"
             }
         }
     }
@@ -841,10 +828,6 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 }
-
-// ============================================
-// ZOOMABLE IMAGE VIEW
-// ============================================
 
 class ZoomableImageView(
     context: android.content.Context
