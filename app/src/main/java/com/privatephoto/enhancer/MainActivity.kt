@@ -35,12 +35,14 @@ import com.google.android.gms.tasks.Tasks
 
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
+import kotlin.math.abs
 
 class MainActivity : Activity() {
 
     private lateinit var photoView: ZoomableImageView
     private lateinit var compareButton: Button
     private lateinit var strengthText: TextView
+    private lateinit var modeText: TextView
     private lateinit var statusText: TextView
     private lateinit var enhanceButton: Button
     private lateinit var saveButton: Button
@@ -49,11 +51,13 @@ class MainActivity : Activity() {
     private lateinit var instructionsInput: EditText
 
     private var selectedStrength = "Balanced"
+    private var selectedMode = "Balanced"
     private var selectedImage: Uri? = null
     private var enhancedBitmap: Bitmap? = null
     private var isShowingEnhanced = false
 
     private val strengthButtons = mutableMapOf<String, Button>()
+    private val modeButtons = mutableMapOf<String, Button>()
     private val executor = Executors.newSingleThreadExecutor()
 
     private val PICK_IMAGE = 100
@@ -166,7 +170,7 @@ class MainActivity : Activity() {
         layout.addView(instructionTitle)
 
         instructionsInput = EditText(this).apply {
-            this.hint = "Example: Make the photo brighter, increase sharpness, add warmth, and make colors more vivid..."
+            hint = "Example: Make the photo brighter, increase sharpness, add warmth, and make colors more vivid..."
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
             textSize = 15f
@@ -195,14 +199,52 @@ class MainActivity : Activity() {
         }
         layout.addView(instructionHelp)
 
-        val label = TextView(this).apply {
+        val modeLabel = TextView(this).apply {
+            text = "Editing Mode"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(16), 0, dp(4))
+        }
+        layout.addView(modeLabel)
+
+        modeText = TextView(this).apply {
+            textSize = 15f
+            setTextColor(Color.GREEN)
+            gravity = Gravity.CENTER
+        }
+        layout.addView(modeText)
+
+        val modeDescriptions = mapOf(
+            "Natural Restore" to "Cleaner photos, gentler sharpening, reduced noise",
+            "Balanced" to "A blend of cleanup and added detail",
+            "Maximum Detail" to "Stronger sharpening and more visible texture"
+        )
+
+        modeDescriptions.keys.forEach { mode ->
+            val button = Button(this).apply {
+                text = mode
+            }
+
+            modeButtons[mode] = button
+            layout.addView(button)
+
+            button.setOnClickListener {
+                if (!isProcessing && !isSaving && !isModelTesting) {
+                    selectedMode = mode
+                    updateModeButtons()
+                }
+            }
+        }
+
+        val strengthLabel = TextView(this).apply {
             text = "Enhancement Strength"
             textSize = 20f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             setPadding(0, dp(14), 0, dp(4))
         }
-        layout.addView(label)
+        layout.addView(strengthLabel)
 
         strengthText = TextView(this).apply {
             textSize = 17f
@@ -279,6 +321,7 @@ class MainActivity : Activity() {
         setContentView(scroll)
 
         updateStrengthButtons()
+        updateModeButtons()
         statusText.text = "Upload a photo to get started"
     }
 
@@ -297,6 +340,10 @@ class MainActivity : Activity() {
             enabled && enhancedBitmap != null
 
         strengthButtons.values.forEach {
+            it.isEnabled = enabled
+        }
+
+        modeButtons.values.forEach {
             it.isEnabled = enabled
         }
     }
@@ -327,9 +374,20 @@ class MainActivity : Activity() {
         strengthButtons.forEach { (strength, button) ->
             val selected = strength == selectedStrength
 
-            button.text =
-                if (selected) "✓ $strength" else strength
+            button.text = if (selected) "✓ $strength" else strength
+            button.setTextColor(
+                if (selected) Color.GREEN else Color.WHITE
+            )
+        }
+    }
 
+    private fun updateModeButtons() {
+        modeText.text = "Selected: $selectedMode"
+
+        modeButtons.forEach { (mode, button) ->
+            val selected = mode == selectedMode
+
+            button.text = if (selected) "✓ $mode" else mode
             button.setTextColor(
                 if (selected) Color.GREEN else Color.WHITE
             )
@@ -350,13 +408,11 @@ class MainActivity : Activity() {
 
         isModelTesting = true
         setControlsEnabled(false)
-
         statusText.text = "Testing Real-ESRGAN AI model..."
 
         executor.execute {
             var environment: LiteRtEnvironment? = null
             var model: CompiledModel? = null
-
             var inputs: List<TensorBuffer> = emptyList()
             var outputs: List<TensorBuffer> = emptyList()
 
@@ -406,18 +462,15 @@ class MainActivity : Activity() {
                     "4× AI upscaling is ready."
 
             } catch (e: Exception) {
-                resultMessage =
-                    "AI model test failed:\n${e.message}"
+                resultMessage = "AI model test failed:\n${e.message}"
 
             } finally {
                 inputs.forEach {
                     try { it.close() } catch (_: Exception) {}
                 }
-
                 outputs.forEach {
                     try { it.close() } catch (_: Exception) {}
                 }
-
                 try { model?.close() } catch (_: Exception) {}
                 try { environment?.close() } catch (_: Exception) {}
             }
@@ -438,11 +491,13 @@ class MainActivity : Activity() {
         var saturation: Float = 1f,
         var warmth: Float = 0f,
         var sharpen: Float = 0.4f,
+        var noiseReduction: Float = 0.12f,
         var grayscale: Boolean = false
     )
 
     private fun interpretInstructions(
         strength: String,
+        mode: String,
         instructions: String
     ): EditSettings {
 
@@ -454,23 +509,39 @@ class MainActivity : Activity() {
                 settings.saturation = 1.02f
                 settings.sharpen = 0.25f
             }
-
             "Balanced" -> {
                 settings.contrast = 1.08f
                 settings.saturation = 1.06f
                 settings.sharpen = 0.45f
             }
-
             "High" -> {
                 settings.contrast = 1.13f
                 settings.saturation = 1.10f
                 settings.sharpen = 0.65f
             }
-
             "Ultra" -> {
                 settings.contrast = 1.18f
                 settings.saturation = 1.14f
                 settings.sharpen = 0.85f
+            }
+        }
+
+        when (mode) {
+            "Natural Restore" -> {
+                settings.noiseReduction = 0.38f
+                settings.sharpen *= 0.72f
+                settings.contrast *= 0.97f
+                settings.saturation *= 0.98f
+            }
+
+            "Balanced" -> {
+                settings.noiseReduction = 0.14f
+            }
+
+            "Maximum Detail" -> {
+                settings.noiseReduction = 0.02f
+                settings.sharpen *= 1.40f
+                settings.contrast *= 1.04f
             }
         }
 
@@ -481,31 +552,23 @@ class MainActivity : Activity() {
             text.contains("brighten") ||
             text.contains("more light") ||
             text.contains("increase brightness")
-        ) {
-            settings.brightness += 0.12f
-        }
+        ) settings.brightness += 0.12f
 
         if (
             text.contains("darker") ||
             text.contains("darken") ||
             text.contains("less light")
-        ) {
-            settings.brightness -= 0.12f
-        }
+        ) settings.brightness -= 0.12f
 
         if (
             text.contains("more contrast") ||
             text.contains("increase contrast")
-        ) {
-            settings.contrast += 0.12f
-        }
+        ) settings.contrast += 0.12f
 
         if (
             text.contains("less contrast") ||
             text.contains("softer contrast")
-        ) {
-            settings.contrast -= 0.10f
-        }
+        ) settings.contrast -= 0.10f
 
         if (
             text.contains("vivid") ||
@@ -513,65 +576,59 @@ class MainActivity : Activity() {
             text.contains("more colour") ||
             text.contains("more color") ||
             text.contains("increase saturation")
-        ) {
-            settings.saturation += 0.20f
-        }
+        ) settings.saturation += 0.20f
 
         if (
             text.contains("less saturation") ||
             text.contains("muted colors") ||
             text.contains("muted colours")
-        ) {
-            settings.saturation -= 0.20f
-        }
+        ) settings.saturation -= 0.20f
 
         if (
             text.contains("warmer") ||
             text.contains("warm tones") ||
             text.contains("warm lighting")
-        ) {
-            settings.warmth += 0.10f
-        }
+        ) settings.warmth += 0.10f
 
         if (
             text.contains("cooler") ||
             text.contains("cool tones") ||
             text.contains("cool lighting")
-        ) {
-            settings.warmth -= 0.10f
-        }
+        ) settings.warmth -= 0.10f
 
         if (
             text.contains("sharper") ||
             text.contains("sharpen") ||
             text.contains("more detail") ||
             text.contains("crisper")
-        ) {
-            settings.sharpen += 0.30f
-        }
+        ) settings.sharpen += 0.30f
 
         if (
             text.contains("softer") ||
             text.contains("less sharp") ||
             text.contains("reduce sharpness")
-        ) {
-            settings.sharpen -= 0.25f
-        }
+        ) settings.sharpen -= 0.25f
 
         if (
             text.contains("no sharpening") ||
             text.contains("disable sharpening")
-        ) {
-            settings.sharpen = 0f
-        }
+        ) settings.sharpen = 0f
 
         if (
             text.contains("black and white") ||
             text.contains("black & white") ||
             text.contains("grayscale") ||
             text.contains("greyscale")
+        ) settings.grayscale = true
+
+        if (
+            text.contains("less noise") ||
+            text.contains("reduce noise") ||
+            text.contains("remove noise") ||
+            text.contains("denoise")
         ) {
-            settings.grayscale = true
+            settings.noiseReduction =
+                (settings.noiseReduction + 0.20f).coerceAtMost(0.65f)
         }
 
         settings.brightness =
@@ -587,7 +644,10 @@ class MainActivity : Activity() {
             settings.warmth.coerceIn(-0.25f, 0.25f)
 
         settings.sharpen =
-            settings.sharpen.coerceIn(0f, 1.2f)
+            settings.sharpen.coerceIn(0f, 1.5f)
+
+        settings.noiseReduction =
+            settings.noiseReduction.coerceIn(0f, 0.70f)
 
         return settings
     }
@@ -611,77 +671,81 @@ class MainActivity : Activity() {
         val next = IntArray(width)
         val outputRow = IntArray(width)
 
-        source.getPixels(
-            current, 0, width, 0, 0, width, 1
-        )
-
-        if (height > 1) {
-            source.getPixels(
-                next, 0, width, 0, 1, width, 1
-            )
-        } else {
-            next.indices.forEach { next[it] = current[it] }
-        }
-
-        previous.indices.forEach { previous[it] = current[it] }
-
         for (y in 0 until height) {
 
-            if (y > 0) {
-                current.copyInto(previous)
+            val previousY = (y - 1).coerceAtLeast(0)
+            val nextY = (y + 1).coerceAtMost(height - 1)
 
-                if (y < height - 1) {
-                    source.getPixels(
-                        next, 0, width, 0, y + 1, width, 1
-                    )
-                } else {
-                    current.copyInto(next)
-                }
-            }
+            source.getPixels(
+                previous, 0, width, 0, previousY, width, 1
+            )
+            source.getPixels(
+                current, 0, width, 0, y, width, 1
+            )
+            source.getPixels(
+                next, 0, width, 0, nextY, width, 1
+            )
 
             for (x in 0 until width) {
 
                 val center = current[x]
+                val left = current[(x - 1).coerceAtLeast(0)]
+                val right = current[(x + 1).coerceAtMost(width - 1)]
+                val top = previous[x]
+                val bottom = next[x]
 
                 val centerR = Color.red(center).toFloat()
                 val centerG = Color.green(center).toFloat()
                 val centerB = Color.blue(center).toFloat()
 
-                val left = current[(x - 1).coerceAtLeast(0)]
-                val right = current[(x + 1).coerceAtMost(width - 1)]
-
-                val top = previous[x]
-                val bottom = next[x]
-
                 val neighborsR = (
-                    Color.red(left) +
-                    Color.red(right) +
-                    Color.red(top) +
-                    Color.red(bottom)
+                    Color.red(left) + Color.red(right) +
+                    Color.red(top) + Color.red(bottom)
                 ) / 4f
 
                 val neighborsG = (
-                    Color.green(left) +
-                    Color.green(right) +
-                    Color.green(top) +
-                    Color.green(bottom)
+                    Color.green(left) + Color.green(right) +
+                    Color.green(top) + Color.green(bottom)
                 ) / 4f
 
                 val neighborsB = (
-                    Color.blue(left) +
-                    Color.blue(right) +
-                    Color.blue(top) +
-                    Color.blue(bottom)
+                    Color.blue(left) + Color.blue(right) +
+                    Color.blue(top) + Color.blue(bottom)
                 ) / 4f
 
-                var r = centerR +
-                    settings.sharpen * (centerR - neighborsR)
+                // Edge-aware noise reduction:
+                // reduce small pixel variations while protecting edges.
+                val difference =
+                    (
+                        abs(centerR - neighborsR) +
+                        abs(centerG - neighborsG) +
+                        abs(centerB - neighborsB)
+                    ) / 3f
 
-                var g = centerG +
-                    settings.sharpen * (centerG - neighborsG)
+                val edgeProtection =
+                    (1f - difference / 48f).coerceIn(0f, 1f)
 
-                var b = centerB +
-                    settings.sharpen * (centerB - neighborsB)
+                val denoiseAmount =
+                    settings.noiseReduction * edgeProtection
+
+                val cleanR =
+                    centerR + (neighborsR - centerR) * denoiseAmount
+
+                val cleanG =
+                    centerG + (neighborsG - centerG) * denoiseAmount
+
+                val cleanB =
+                    centerB + (neighborsB - centerB) * denoiseAmount
+
+                // Sharpen the cleaned pixel against its neighborhood.
+                var r = cleanR +
+                    settings.sharpen * (cleanR - neighborsR)
+
+                var g = cleanG +
+                    settings.sharpen * (cleanG - neighborsG)
+
+                var b = cleanB +
+                    settings.sharpen * (cleanB - neighborsB)
 
                 r = (r - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
@@ -718,13 +782,7 @@ class MainActivity : Activity() {
             }
 
             output.setPixels(
-                outputRow,
-                0,
-                width,
-                0,
-                y,
-                width,
-                1
+                outputRow, 0, width, 0, y, width, 1
             )
         }
 
@@ -805,13 +863,7 @@ class MainActivity : Activity() {
             val sourcePixels = IntArray(width * height)
 
             source.getPixels(
-                sourcePixels,
-                0,
-                width,
-                0,
-                0,
-                width,
-                height
+                sourcePixels, 0, width, 0, 0, width, height
             )
 
             val inputData = FloatArray(INPUT_ELEMENTS)
@@ -1015,6 +1067,7 @@ class MainActivity : Activity() {
         isProcessing = true
 
         val strength = selectedStrength
+        val mode = selectedMode
         val instructions = instructionsInput.text.toString().trim()
 
         setControlsEnabled(false)
@@ -1082,13 +1135,14 @@ class MainActivity : Activity() {
 
                 val settings = interpretInstructions(
                     strength,
+                    mode,
                     instructions
                 )
 
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         statusText.text =
-                            "Applying your editing instructions..."
+                            "Applying $mode editing..."
                     }
                 }
 
@@ -1126,7 +1180,7 @@ class MainActivity : Activity() {
                     setControlsEnabled(true)
 
                     statusText.text =
-                        "Enhancement complete! 4× AI upscale + offline editing ($strength)."
+                        "Complete! 4× AI upscale • $mode • $strength strength."
 
                     Toast.makeText(
                         this,
@@ -1179,7 +1233,6 @@ class MainActivity : Activity() {
 
         isSaving = true
         setControlsEnabled(false)
-
         statusText.text = "Saving enhanced photo..."
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -1192,18 +1245,15 @@ class MainActivity : Activity() {
                             MediaStore.Images.Media.DISPLAY_NAME,
                             "Enhanced_${System.currentTimeMillis()}.jpg"
                         )
-
                         put(
                             MediaStore.Images.Media.MIME_TYPE,
                             "image/jpeg"
                         )
-
                         put(
                             MediaStore.Images.Media.RELATIVE_PATH,
                             Environment.DIRECTORY_PICTURES +
                                 "/Private Photo Enhancer"
                         )
-
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
 
@@ -1241,9 +1291,7 @@ class MainActivity : Activity() {
 
                         isSaving = false
                         setControlsEnabled(true)
-
-                        statusText.text =
-                            "Photo saved to your gallery!"
+                        statusText.text = "Photo saved to your gallery!"
 
                         Toast.makeText(
                             this,
@@ -1368,7 +1416,7 @@ class MainActivity : Activity() {
             saveButton.isEnabled = false
 
             statusText.text =
-                "Original photo loaded. Add editing instructions or use the default enhancement!"
+                "Original photo loaded. Choose an editing mode and strength, then enhance!"
 
             return
         }
