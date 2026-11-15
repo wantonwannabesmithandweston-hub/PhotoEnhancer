@@ -19,14 +19,32 @@ def home():
     return {
         "status": "online",
         "service": "Private Photo Enhancer",
-        "version": "1.0"
+        "version": "1.1"
     }
+
 
 @app.get("/health")
 def health():
     return {"status": "healthy"}
 
-@app.post("/enhance")
+
+@app.post(
+    "/enhance",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Enhanced PNG image",
+            "content": {
+                "image/png": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary"
+                    }
+                }
+            }
+        }
+    }
+)
 async def enhance(
     image: UploadFile = File(...),
     prompt: str = Form(""),
@@ -40,13 +58,23 @@ async def enhance(
             detail="OpenAI API key is not configured."
         )
 
-    if strength not in ["Low", "Balanced", "High", "Ultra"]:
+    quality_settings = {
+        "Low": "low",
+        "Balanced": "medium",
+        "High": "high",
+        "Ultra": "xhigh"
+    }
+
+    if strength not in quality_settings:
         strength = "Balanced"
 
     prompt = prompt.strip()
 
     if len(prompt) > 2000:
-        raise HTTPException(400, "Editing instructions are too long.")
+        raise HTTPException(
+            status_code=400,
+            detail="Editing instructions are too long."
+        )
 
     unsafe_terms = re.compile(
         r"\b(undress|remove clothing|remove clothes|"
@@ -87,22 +115,38 @@ async def enhance(
 
     strength_instructions = {
         "Low": "Apply subtle, natural improvements.",
-        "Balanced": "Apply strong but natural-looking improvements.",
-        "High": "Apply advanced enhancement with detailed restoration.",
-        "Ultra": "Apply maximum careful restoration and detail enhancement."
+        "Balanced": (
+            "Apply strong but natural-looking improvements. "
+            "Improve clarity, lighting, color and fine details."
+        ),
+        "High": (
+            "Apply advanced photographic restoration. "
+            "Improve sharpness, lighting, texture, "
+            "color accuracy and fine details."
+        ),
+        "Ultra": (
+            "Apply maximum careful photographic restoration. "
+            "Recover as much authentic detail as possible, "
+            "improve clarity, texture, lighting and color "
+            "while maintaining a realistic photograph."
+        )
     }
 
     instructions = (
-        "Edit the supplied photograph. Preserve the person's identity, "
-        "facial features, clothing, pose and natural appearance. "
-        "Do not invent facial details or change the person's identity. "
-        "Keep people appropriately clothed. Do not create nude images "
-        "or remove clothing. Preserve realistic photographic quality. "
+        "Enhance the supplied photograph. "
+        "Preserve the original person's identity, facial features, "
+        "clothing, pose and natural appearance. "
+        "Do not invent facial details or change identity. "
+        "Keep people appropriately clothed. "
+        "Do not create nude images or remove clothing. "
+        "Preserve realistic photographic quality. "
         + strength_instructions[strength]
     )
 
     if prompt:
-        instructions += "\nAdditional requested edits: " + prompt
+        instructions += (
+            "\nAdditional requested edits: " + prompt
+        )
 
     try:
         client = OpenAI(api_key=api_key)
@@ -111,8 +155,12 @@ async def enhance(
             model=MODEL,
             image=buffer,
             prompt=instructions,
-            quality="high"
+            quality=quality_settings[strength],
+            output_format="png"
         )
+
+        if not result.data or not result.data[0].b64_json:
+            raise RuntimeError("No enhanced image was returned.")
 
         image_data = result.data[0].b64_json
         output_bytes = base64.b64decode(image_data)
@@ -121,12 +169,16 @@ async def enhance(
             content=output_bytes,
             media_type="image/png",
             headers={
-                "Cache-Control": "no-store"
+                "Cache-Control": "no-store",
+                "Content-Disposition": (
+                    'inline; filename="enhanced_photo.png"'
+                )
             }
         )
 
     except Exception as error:
         print("Enhancement error:", str(error))
+
         raise HTTPException(
             status_code=502,
             detail="AI enhancement failed. Please try again."
