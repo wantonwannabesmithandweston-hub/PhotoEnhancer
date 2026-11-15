@@ -19,6 +19,7 @@ import android.view.MotionEvent
 import android.view.GestureDetector
 import android.view.ScaleGestureDetector
 import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -45,6 +46,7 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
+    private lateinit var instructionsInput: EditText
 
     private var selectedStrength = "Balanced"
     private var selectedImage: Uri? = null
@@ -102,8 +104,8 @@ class MainActivity : Activity() {
         layout.addView(title)
 
         val hint = TextView(this).apply {
-            text = "Pinch to zoom • Drag to inspect • Double-tap to zoom"
-            textSize = 13f
+            text = "Free Offline AI Photo Editing"
+            textSize = 14f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
         }
@@ -154,11 +156,53 @@ class MainActivity : Activity() {
             }
         }
 
+        // CUSTOM EDITING INSTRUCTIONS
+
+        val instructionTitle = TextView(this).apply {
+            text = "Custom Editing Instructions"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(18), 0, dp(8))
+        }
+        layout.addView(instructionTitle)
+
+        instructionsInput = EditText(this).apply {
+            hint = "Example: Make the photo brighter, increase sharpness, add warmth, and make colors more vivid..."
+            setHintTextColor(Color.GRAY)
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            gravity = Gravity.TOP or Gravity.START
+            minLines = 3
+            maxLines = 6
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setBackgroundColor(Color.rgb(48, 48, 48))
+        }
+
+        layout.addView(
+            instructionsInput,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 0, 0, dp(12))
+            }
+        )
+
+        val instructionHelp = TextView(this).apply {
+            text = "Supported: brighter, darker, sharper, softer, more contrast, vivid colors, less saturation, warmer, cooler, black and white."
+            textSize = 12f
+            setTextColor(Color.LTGRAY)
+            gravity = Gravity.CENTER
+        }
+        layout.addView(instructionHelp)
+
         val label = TextView(this).apply {
             text = "Enhancement Strength"
             textSize = 20f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
+            setPadding(0, dp(14), 0, dp(4))
         }
         layout.addView(label)
 
@@ -194,6 +238,7 @@ class MainActivity : Activity() {
             textSize = 16f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(12))
         }
         layout.addView(statusText)
 
@@ -239,121 +284,13 @@ class MainActivity : Activity() {
         statusText.text = "Upload a photo to get started"
     }
 
-    // REAL AI MODEL TEST
-
-    private fun testAiModel() {
-        if (isModelTesting || isProcessing || isSaving) return
-
-        isModelTesting = true
-        setControlsEnabled(false)
-
-        statusText.text = "Testing Real-ESRGAN AI model..."
-
-        executor.execute {
-            var environment: LiteRtEnvironment? = null
-            var model: CompiledModel? = null
-
-            var inputs: List<TensorBuffer> = emptyList()
-            var outputs: List<TensorBuffer> = emptyList()
-
-            var resultMessage: String
-
-            try {
-                environment = Tasks.await(
-                    LiteRt.initialize(applicationContext)
-                )
-
-                model = CompiledModel.create(
-                    assets,
-                    modelFile,
-                    CompiledModel.Options(Accelerator.CPU),
-                    environment
-                )
-
-                inputs = model.createInputBuffers()
-                outputs = model.createOutputBuffers()
-
-                if (inputs.size != 1 || outputs.size != 1) {
-                    throw Exception(
-                        "Unexpected model tensor count. " +
-                            "Inputs: ${inputs.size}, outputs: ${outputs.size}"
-                    )
-                }
-
-                val testInput = FloatArray(INPUT_ELEMENTS) {
-                    0.5f
-                }
-
-                inputs[0].writeFloat(testInput)
-                model.run(inputs, outputs)
-
-                val testOutput = outputs[0].readFloat()
-
-                if (testOutput.size != OUTPUT_ELEMENTS) {
-                    throw Exception(
-                        "Unexpected output size: ${testOutput.size}. " +
-                            "Expected: $OUTPUT_ELEMENTS"
-                    )
-                }
-
-                if (testOutput.any {
-                    it.isNaN() || it.isInfinite()
-                }) {
-                    throw Exception("Model produced invalid output values")
-                }
-
-                resultMessage =
-                    "AI MODEL TEST PASSED!\n" +
-                    "Real inference completed successfully.\n" +
-                    "Input: 128 × 128 RGB\n" +
-                    "Output: 512 × 512 RGB\n" +
-                    "4× AI upscaling is ready."
-
-            } catch (e: Exception) {
-                resultMessage =
-                    "AI model test failed:\n" +
-                    (e.message ?: e.javaClass.simpleName)
-
-            } finally {
-                inputs.forEach {
-                    try {
-                        it.close()
-                    } catch (_: Exception) {
-                    }
-                }
-
-                outputs.forEach {
-                    try {
-                        it.close()
-                    } catch (_: Exception) {
-                    }
-                }
-
-                try {
-                    model?.close()
-                } catch (_: Exception) {
-                }
-
-                try {
-                    environment?.close()
-                } catch (_: Exception) {
-                }
-            }
-
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-
-                isModelTesting = false
-                setControlsEnabled(true)
-                statusText.text = resultMessage
-            }
-        }
-    }
+    // ENABLE / DISABLE CONTROLS
 
     private fun setControlsEnabled(enabled: Boolean) {
         enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
+        instructionsInput.isEnabled = enabled
 
         saveButton.isEnabled =
             enabled &&
@@ -414,149 +351,429 @@ class MainActivity : Activity() {
         }
     }
 
-    // REAL-ESRGAN PHOTO ENHANCEMENT
+    // TEST REAL AI MODEL
 
-    private fun enhancePhoto(uri: Uri) {
-        if (isProcessing || isSaving || isModelTesting) return
+    private fun testAiModel() {
+        if (isModelTesting || isProcessing || isSaving) return
 
-        isProcessing = true
-        val strength = selectedStrength
-
+        isModelTesting = true
         setControlsEnabled(false)
-        statusText.text = "Preparing photo for AI enhancement..."
+
+        statusText.text = "Testing Real-ESRGAN AI model..."
 
         executor.execute {
-            var result: Bitmap? = null
+            var environment: LiteRtEnvironment? = null
+            var model: CompiledModel? = null
+
+            var inputs: List<TensorBuffer> = emptyList()
+            var outputs: List<TensorBuffer> = emptyList()
+
+            var resultMessage: String
 
             try {
-                val bytes = readPhotoBytes(uri)
-
-                val bounds = BitmapFactory.Options().apply {
-                    inJustDecodeBounds = true
-                }
-
-                BitmapFactory.decodeByteArray(
-                    bytes,
-                    0,
-                    bytes.size,
-                    bounds
+                environment = Tasks.await(
+                    LiteRt.initialize(applicationContext)
                 )
 
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    throw Exception("Invalid photo")
+                model = CompiledModel.create(
+                    assets,
+                    modelFile,
+                    CompiledModel.Options(Accelerator.CPU),
+                    environment
+                )
+
+                inputs = model.createInputBuffers()
+                outputs = model.createOutputBuffers()
+
+                if (inputs.size != 1 || outputs.size != 1) {
+                    throw Exception("Unexpected model tensor count")
                 }
 
-                var sample = 1
+                val testInput = FloatArray(INPUT_ELEMENTS) { 0.5f }
 
-                while (
-                    bounds.outWidth / sample > MAX_INPUT_DIMENSION ||
-                    bounds.outHeight / sample > MAX_INPUT_DIMENSION
-                ) {
-                    sample *= 2
+                inputs[0].writeFloat(testInput)
+                model.run(inputs, outputs)
+
+                val testOutput = outputs[0].readFloat()
+
+                if (testOutput.size != OUTPUT_ELEMENTS) {
+                    throw Exception("Unexpected output size")
                 }
 
-                val options = BitmapFactory.Options().apply {
-                    inSampleSize = sample
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                if (testOutput.any {
+                    it.isNaN() || it.isInfinite()
+                }) {
+                    throw Exception("Invalid model output")
                 }
 
-                val source = BitmapFactory.decodeByteArray(
-                    bytes,
-                    0,
-                    bytes.size,
-                    options
-                ) ?: throw Exception("Could not decode photo")
-
-                try {
-                    runOnUiThread {
-                        if (!isFinishing && !isDestroyed) {
-                            statusText.text =
-                                "Running overlapping Real-ESRGAN AI tiles..."
-                        }
-                    }
-
-                    result = runRealEsrgan(source, strength) {
-                            completed, total ->
-
-                        runOnUiThread {
-                            if (!isFinishing && !isDestroyed) {
-                                statusText.text =
-                                    "AI processing tile $completed of $total..."
-                            }
-                        }
-                    }
-
-                } finally {
-                    source.recycle()
-                }
-
-                val completed = result
-                    ?: throw Exception("AI did not produce an image")
-
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) {
-                        completed.recycle()
-                        return@runOnUiThread
-                    }
-
-                    enhancedBitmap?.let {
-                        if (!it.isRecycled) {
-                            it.recycle()
-                        }
-                    }
-
-                    enhancedBitmap = completed
-                    isShowingEnhanced = true
-
-                    displayCurrentPhoto()
-
-                    isProcessing = false
-                    setControlsEnabled(true)
-
-                    statusText.text =
-                        "AI enhancement complete! 4× upscale ($strength)."
-
-                    Toast.makeText(
-                        this,
-                        "AI enhanced photo is ready!",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-
-                result = null
+                resultMessage =
+                    "AI MODEL TEST PASSED!\n" +
+                    "Real inference completed successfully.\n" +
+                    "Input: 128 × 128 RGB\n" +
+                    "Output: 512 × 512 RGB\n" +
+                    "4× AI upscaling is ready."
 
             } catch (e: Exception) {
-                result?.let {
-                    if (!it.isRecycled) {
-                        it.recycle()
-                    }
+                resultMessage =
+                    "AI model test failed:\n${e.message}"
+
+            } finally {
+                inputs.forEach {
+                    try { it.close() } catch (_: Exception) {}
                 }
 
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-
-                    isProcessing = false
-                    setControlsEnabled(true)
-
-                    statusText.text =
-                        "AI enhancement failed: ${e.message}"
-
-                    Toast.makeText(
-                        this,
-                        "AI enhancement failed",
-                        Toast.LENGTH_LONG
-                    ).show()
+                outputs.forEach {
+                    try { it.close() } catch (_: Exception) {}
                 }
+
+                try { model?.close() } catch (_: Exception) {}
+                try { environment?.close() } catch (_: Exception) {}
+            }
+
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+
+                isModelTesting = false
+                setControlsEnabled(true)
+                statusText.text = resultMessage
             }
         }
+    }
+
+    // PARSE OFFLINE EDITING INSTRUCTIONS
+
+    private data class EditSettings(
+        var brightness: Float = 0f,
+        var contrast: Float = 1f,
+        var saturation: Float = 1f,
+        var warmth: Float = 0f,
+        var sharpen: Float = 0.4f,
+        var grayscale: Boolean = false
+    )
+
+    private fun interpretInstructions(
+        strength: String,
+        instructions: String
+    ): EditSettings {
+
+        val settings = EditSettings()
+
+        when (strength) {
+            "Low" -> {
+                settings.contrast = 1.04f
+                settings.saturation = 1.02f
+                settings.sharpen = 0.25f
+            }
+
+            "Balanced" -> {
+                settings.contrast = 1.08f
+                settings.saturation = 1.06f
+                settings.sharpen = 0.45f
+            }
+
+            "High" -> {
+                settings.contrast = 1.13f
+                settings.saturation = 1.10f
+                settings.sharpen = 0.65f
+            }
+
+            "Ultra" -> {
+                settings.contrast = 1.18f
+                settings.saturation = 1.14f
+                settings.sharpen = 0.85f
+            }
+        }
+
+        val text = instructions.lowercase()
+
+        // Brightness
+
+        if (
+            text.contains("brighter") ||
+            text.contains("brighten") ||
+            text.contains("more light") ||
+            text.contains("increase brightness")
+        ) {
+            settings.brightness += 0.12f
+        }
+
+        if (
+            text.contains("darker") ||
+            text.contains("darken") ||
+            text.contains("less light")
+        ) {
+            settings.brightness -= 0.12f
+        }
+
+        // Contrast
+
+        if (
+            text.contains("more contrast") ||
+            text.contains("increase contrast")
+        ) {
+            settings.contrast += 0.12f
+        }
+
+        if (
+            text.contains("less contrast") ||
+            text.contains("softer contrast")
+        ) {
+            settings.contrast -= 0.10f
+        }
+
+        // Saturation
+
+        if (
+            text.contains("vivid") ||
+            text.contains("more colorful") ||
+            text.contains("more colour") ||
+            text.contains("more color") ||
+            text.contains("increase saturation")
+        ) {
+            settings.saturation += 0.20f
+        }
+
+        if (
+            text.contains("less saturation") ||
+            text.contains("muted colors") ||
+            text.contains("muted colours")
+        ) {
+            settings.saturation -= 0.20f
+        }
+
+        // Warmth
+
+        if (
+            text.contains("warmer") ||
+            text.contains("warm tones") ||
+            text.contains("warm lighting")
+        ) {
+            settings.warmth += 0.10f
+        }
+
+        if (
+            text.contains("cooler") ||
+            text.contains("cool tones") ||
+            text.contains("cool lighting")
+        ) {
+            settings.warmth -= 0.10f
+        }
+
+        // Sharpness
+
+        if (
+            text.contains("sharper") ||
+            text.contains("sharpen") ||
+            text.contains("more detail") ||
+            text.contains("crisper")
+        ) {
+            settings.sharpen += 0.30f
+        }
+
+        if (
+            text.contains("softer") ||
+            text.contains("less sharp") ||
+            text.contains("reduce sharpness")
+        ) {
+            settings.sharpen -= 0.25f
+        }
+
+        if (
+            text.contains("no sharpening") ||
+            text.contains("disable sharpening")
+        ) {
+            settings.sharpen = 0f
+        }
+
+        // Black and white
+
+        if (
+            text.contains("black and white") ||
+            text.contains("black & white") ||
+            text.contains("grayscale") ||
+            text.contains("greyscale")
+        ) {
+            settings.grayscale = true
+        }
+
+        // Keep adjustments within sensible limits.
+
+        settings.brightness =
+            settings.brightness.coerceIn(-0.30f, 0.30f)
+
+        settings.contrast =
+            settings.contrast.coerceIn(0.75f, 1.55f)
+
+        settings.saturation =
+            settings.saturation.coerceIn(0f, 1.60f)
+
+        settings.warmth =
+            settings.warmth.coerceIn(-0.25f, 0.25f)
+
+        settings.sharpen =
+            settings.sharpen.coerceIn(0f, 1.2f)
+
+        return settings
+    }
+
+    // LOCAL IMAGE PROCESSING
+    // No internet or paid AI service required.
+
+    private fun applyLocalEditing(
+        source: Bitmap,
+        settings: EditSettings
+    ): Bitmap {
+
+        val width = source.width
+        val height = source.height
+
+        val output = Bitmap.createBitmap(
+            width,
+            height,
+            Bitmap.Config.ARGB_8888
+        )
+
+        val previous = IntArray(width)
+        val current = IntArray(width)
+        val next = IntArray(width)
+        val outputRow = IntArray(width)
+
+        source.getPixels(
+            current, 0, width, 0, 0, width, 1
+        )
+
+        if (height > 1) {
+            source.getPixels(
+                next, 0, width, 0, 1, width, 1
+            )
+        } else {
+            next.indices.forEach { next[it] = current[it] }
+        }
+
+        previous.indices.forEach { previous[it] = current[it] }
+
+        for (y in 0 until height) {
+
+            if (y > 0) {
+                current.copyInto(previous)
+
+                if (y < height - 1) {
+                    source.getPixels(
+                        next, 0, width, 0, y + 1, width, 1
+                    )
+                } else {
+                    current.copyInto(next)
+                }
+            }
+
+            for (x in 0 until width) {
+
+                val center = current[x]
+
+                val centerR = Color.red(center).toFloat()
+                val centerG = Color.green(center).toFloat()
+                val centerB = Color.blue(center).toFloat()
+
+                // Calculate local neighborhood for sharpening.
+
+                val left = current[(x - 1).coerceAtLeast(0)]
+                val right = current[(x + 1).coerceAtMost(width - 1)]
+
+                val top = previous[x]
+                val bottom = next[x]
+
+                val neighborsR = (
+                    Color.red(left) +
+                    Color.red(right) +
+                    Color.red(top) +
+                    Color.red(bottom)
+                ) / 4f
+
+                val neighborsG = (
+                    Color.green(left) +
+                    Color.green(right) +
+                    Color.green(top) +
+                    Color.green(bottom)
+                ) / 4f
+
+                val neighborsB = (
+                    Color.blue(left) +
+                    Color.blue(right) +
+                    Color.blue(top) +
+                    Color.blue(bottom)
+                ) / 4f
+
+                // Unsharp masking.
+
+                var r = centerR +
+                    settings.sharpen * (centerR - neighborsR)
+
+                var g = centerG +
+                    settings.sharpen * (centerG - neighborsG)
+
+                var b = centerB +
+                    settings.sharpen * (centerB - neighborsB)
+
+                // Brightness and contrast.
+
+                r = (r - 127.5f) * settings.contrast +
+                    127.5f + settings.brightness * 255f
+
+                g = (g - 127.5f) * settings.contrast +
+                    127.5f + settings.brightness * 255f
+
+                b = (b - 127.5f) * settings.contrast +
+                    127.5f + settings.brightness * 255f
+
+                // Color temperature.
+
+                r += settings.warmth * 255f
+                b -= settings.warmth * 255f
+
+                // Saturation.
+
+                val gray =
+                    0.299f * r +
+                    0.587f * g +
+                    0.114f * b
+
+                r = gray + (r - gray) * settings.saturation
+                g = gray + (g - gray) * settings.saturation
+                b = gray + (b - gray) * settings.saturation
+
+                // Black and white.
+
+                if (settings.grayscale) {
+                    r = gray
+                    g = gray
+                    b = gray
+                }
+
+                outputRow[x] = Color.rgb(
+                    r.roundToInt().coerceIn(0, 255),
+                    g.roundToInt().coerceIn(0, 255),
+                    b.roundToInt().coerceIn(0, 255)
+                )
+            }
+
+            output.setPixels(
+                outputRow,
+                0,
+                width,
+                0,
+                y,
+                width,
+                1
+            )
+        }
+
+        return output
     }
 
     // CREATE OVERLAPPING TILE POSITIONS
 
     private fun createTileStarts(length: Int): List<Int> {
-        if (length <= TILE_SIZE) {
-            return listOf(0)
-        }
+        if (length <= TILE_SIZE) return listOf(0)
 
         val starts = mutableListOf(0)
 
@@ -564,12 +781,12 @@ class MainActivity : Activity() {
             val next = starts.last() + TILE_STRIDE
 
             if (next + TILE_SIZE >= length) {
-                val finalStart = (length - TILE_SIZE).coerceAtLeast(0)
+                val finalStart =
+                    (length - TILE_SIZE).coerceAtLeast(0)
 
                 if (finalStart > starts.last()) {
                     starts.add(finalStart)
                 }
-
                 break
             }
 
@@ -579,14 +796,7 @@ class MainActivity : Activity() {
         return starts
     }
 
-    // REAL-ESRGAN OVERLAPPING TILE INFERENCE ENGINE
-    //
-    // Input: 128 × 128 × 3 RGB float
-    // Output: 512 × 512 × 3 RGB float
-    //
-    // Tiles overlap by 32 input pixels.
-    // Only the central, non-overlapping portions are copied.
-    // This helps reduce visible tile boundaries.
+    // REAL-ESRGAN INFERENCE ENGINE
 
     private fun runRealEsrgan(
         source: Bitmap,
@@ -627,8 +837,13 @@ class MainActivity : Activity() {
             val width = source.width
             val height = source.height
 
-            val outputWidth = width * 4
-            val outputHeight = height * 4
+            val destination = Bitmap.createBitmap(
+                width * 4,
+                height * 4,
+                Bitmap.Config.ARGB_8888
+            )
+
+            resultBitmap = destination
 
             val sourcePixels = IntArray(width * height)
 
@@ -642,14 +857,6 @@ class MainActivity : Activity() {
                 height
             )
 
-            val destination = Bitmap.createBitmap(
-                outputWidth,
-                outputHeight,
-                Bitmap.Config.ARGB_8888
-            )
-
-            resultBitmap = destination
-
             val inputData = FloatArray(INPUT_ELEMENTS)
 
             val xStarts = createTileStarts(width)
@@ -659,10 +866,10 @@ class MainActivity : Activity() {
             var tileNumber = 0
 
             val contrast = when (strength) {
-                "Low" -> 0.98f
-                "High" -> 1.06f
-                "Ultra" -> 1.09f
-                else -> 1.02f
+                "Low" -> 1.00f
+                "High" -> 1.08f
+                "Ultra" -> 1.12f
+                else -> 1.04f
             }
 
             val saturation = when (strength) {
@@ -677,8 +884,6 @@ class MainActivity : Activity() {
 
                 for (xIndex in xStarts.indices) {
                     val tileX = xStarts[xIndex]
-
-                    // Prepare the 128 × 128 RGB input tile.
 
                     for (y in 0 until TILE_SIZE) {
                         for (x in 0 until TILE_SIZE) {
@@ -696,36 +901,28 @@ class MainActivity : Activity() {
                             var g = Color.green(pixel) / 255f
                             var b = Color.blue(pixel) / 255f
 
-                            // Apply selected strength before inference.
+                            r = ((r - 0.5f) * contrast + 0.5f)
+                                .coerceIn(0f, 1f)
 
-                            r = (
-                                (r - 0.5f) * contrast + 0.5f
-                            ).coerceIn(0f, 1f)
+                            g = ((g - 0.5f) * contrast + 0.5f)
+                                .coerceIn(0f, 1f)
 
-                            g = (
-                                (g - 0.5f) * contrast + 0.5f
-                            ).coerceIn(0f, 1f)
-
-                            b = (
-                                (b - 0.5f) * contrast + 0.5f
-                            ).coerceIn(0f, 1f)
+                            b = ((b - 0.5f) * contrast + 0.5f)
+                                .coerceIn(0f, 1f)
 
                             val gray =
                                 0.299f * r +
                                 0.587f * g +
                                 0.114f * b
 
-                            r = (
-                                gray + (r - gray) * saturation
-                            ).coerceIn(0f, 1f)
+                            r = (gray + (r - gray) * saturation)
+                                .coerceIn(0f, 1f)
 
-                            g = (
-                                gray + (g - gray) * saturation
-                            ).coerceIn(0f, 1f)
+                            g = (gray + (g - gray) * saturation)
+                                .coerceIn(0f, 1f)
 
-                            b = (
-                                gray + (b - gray) * saturation
-                            ).coerceIn(0f, 1f)
+                            b = (gray + (b - gray) * saturation)
+                                .coerceIn(0f, 1f)
 
                             val index =
                                 (y * TILE_SIZE + x) * CHANNELS
@@ -736,21 +933,14 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    // Run AI inference.
-
                     inputBuffer.writeFloat(inputData)
                     model.run(inputBuffers, outputBuffers)
 
                     val aiOutput = outputBuffer.readFloat()
 
                     if (aiOutput.size != OUTPUT_ELEMENTS) {
-                        throw Exception(
-                            "Unexpected AI output size: ${aiOutput.size}. " +
-                                "Expected: $OUTPUT_ELEMENTS"
-                        )
+                        throw Exception("Unexpected AI output size")
                     }
-
-                    // Convert model output into bitmap pixels.
 
                     val tilePixels = IntArray(
                         OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE
@@ -780,14 +970,12 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    // Calculate crop boundaries between overlapping tiles.
-                    // This keeps each output area from being written twice.
-
                     val cropLeft = if (xIndex == 0) {
                         0
                     } else {
                         (
-                            xStarts[xIndex - 1] + TILE_SIZE - tileX
+                            xStarts[xIndex - 1] +
+                            TILE_SIZE - tileX
                         ) / 2
                     }.coerceIn(0, TILE_SIZE)
 
@@ -795,7 +983,8 @@ class MainActivity : Activity() {
                         0
                     } else {
                         (
-                            yStarts[yIndex - 1] + TILE_SIZE - tileY
+                            yStarts[yIndex - 1] +
+                            TILE_SIZE - tileY
                         ) / 2
                     }.coerceIn(0, TILE_SIZE)
 
@@ -803,7 +992,8 @@ class MainActivity : Activity() {
                         minOf(TILE_SIZE, width - tileX)
                     } else {
                         (
-                            tileX + TILE_SIZE + xStarts[xIndex + 1]
+                            tileX + TILE_SIZE +
+                            xStarts[xIndex + 1]
                         ) / 2 - tileX
                     }.coerceIn(cropLeft, TILE_SIZE)
 
@@ -811,7 +1001,8 @@ class MainActivity : Activity() {
                         minOf(TILE_SIZE, height - tileY)
                     } else {
                         (
-                            tileY + TILE_SIZE + yStarts[yIndex + 1]
+                            tileY + TILE_SIZE +
+                            yStarts[yIndex + 1]
                         ) / 2 - tileY
                     }.coerceIn(cropTop, TILE_SIZE)
 
@@ -843,36 +1034,176 @@ class MainActivity : Activity() {
 
         } catch (e: Exception) {
             resultBitmap?.let {
-                if (!it.isRecycled) {
-                    it.recycle()
-                }
+                if (!it.isRecycled) it.recycle()
             }
-
             throw e
 
         } finally {
             inputBuffers.forEach {
-                try {
-                    it.close()
-                } catch (_: Exception) {
-                }
+                try { it.close() } catch (_: Exception) {}
             }
 
             outputBuffers.forEach {
-                try {
-                    it.close()
-                } catch (_: Exception) {
+                try { it.close() } catch (_: Exception) {}
+            }
+
+            try { model?.close() } catch (_: Exception) {}
+            try { environment?.close() } catch (_: Exception) {}
+        }
+    }
+
+    // COMPLETE PHOTO ENHANCEMENT
+
+    private fun enhancePhoto(uri: Uri) {
+        if (isProcessing || isSaving || isModelTesting) return
+
+        isProcessing = true
+
+        val strength = selectedStrength
+        val instructions = instructionsInput.text.toString().trim()
+
+        setControlsEnabled(false)
+        statusText.text = "Preparing photo for AI enhancement..."
+
+        executor.execute {
+            var aiBitmap: Bitmap? = null
+            var finalBitmap: Bitmap? = null
+
+            try {
+                val bytes = readPhotoBytes(uri)
+
+                val bounds = BitmapFactory.Options().apply {
+                    inJustDecodeBounds = true
                 }
-            }
 
-            try {
-                model?.close()
-            } catch (_: Exception) {
-            }
+                BitmapFactory.decodeByteArray(
+                    bytes, 0, bytes.size, bounds
+                )
 
-            try {
-                environment?.close()
-            } catch (_: Exception) {
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                    throw Exception("Invalid photo")
+                }
+
+                var sample = 1
+
+                while (
+                    bounds.outWidth / sample > MAX_INPUT_DIMENSION ||
+                    bounds.outHeight / sample > MAX_INPUT_DIMENSION
+                ) {
+                    sample *= 2
+                }
+
+                val options = BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+
+                val source = BitmapFactory.decodeByteArray(
+                    bytes, 0, bytes.size, options
+                ) ?: throw Exception("Could not decode photo")
+
+                try {
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            statusText.text =
+                                "Running Real-ESRGAN AI enhancement..."
+                        }
+                    }
+
+                    aiBitmap = runRealEsrgan(source, strength) {
+                        completed, total ->
+
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                statusText.text =
+                                    "AI processing tile $completed of $total..."
+                            }
+                        }
+                    }
+
+                } finally {
+                    source.recycle()
+                }
+
+                val settings = interpretInstructions(
+                    strength,
+                    instructions
+                )
+
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        statusText.text =
+                            "Applying your editing instructions..."
+                    }
+                }
+
+                val aiResult = aiBitmap
+                    ?: throw Exception("AI did not produce an image")
+
+                finalBitmap = applyLocalEditing(
+                    aiResult,
+                    settings
+                )
+
+                aiResult.recycle()
+                aiBitmap = null
+
+                val completed = finalBitmap
+                    ?: throw Exception("Editing failed")
+
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) {
+                        completed.recycle()
+                        return@runOnUiThread
+                    }
+
+                    enhancedBitmap?.let {
+                        if (!it.isRecycled) it.recycle()
+                    }
+
+                    enhancedBitmap = completed
+                    finalBitmap = null
+                    isShowingEnhanced = true
+
+                    displayCurrentPhoto()
+
+                    isProcessing = false
+                    setControlsEnabled(true)
+
+                    statusText.text =
+                        "Enhancement complete! 4× AI upscale + offline editing ($strength)."
+
+                    Toast.makeText(
+                        this,
+                        "Enhanced photo is ready!",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+
+            } catch (e: Exception) {
+                aiBitmap?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
+
+                finalBitmap?.let {
+                    if (!it.isRecycled) it.recycle()
+                }
+
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+
+                    isProcessing = false
+                    setControlsEnabled(true)
+
+                    statusText.text =
+                        "Enhancement failed: ${e.message}"
+
+                    Toast.makeText(
+                        this,
+                        "Enhancement failed",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
     }
@@ -920,10 +1251,7 @@ class MainActivity : Activity() {
                                 "/Private Photo Enhancer"
                         )
 
-                        put(
-                            MediaStore.Images.Media.IS_PENDING,
-                            1
-                        )
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
 
                     savedUri = contentResolver.insert(
@@ -932,8 +1260,7 @@ class MainActivity : Activity() {
                     ) ?: throw Exception("Could not create photo")
 
                     val output = contentResolver.openOutputStream(
-                        savedUri,
-                        "w"
+                        savedUri, "w"
                     ) ?: throw Exception("Could not open output")
 
                     val success = output.use {
@@ -949,17 +1276,11 @@ class MainActivity : Activity() {
                     }
 
                     val finished = ContentValues().apply {
-                        put(
-                            MediaStore.Images.Media.IS_PENDING,
-                            0
-                        )
+                        put(MediaStore.Images.Media.IS_PENDING, 0)
                     }
 
                     contentResolver.update(
-                        savedUri,
-                        finished,
-                        null,
-                        null
+                        savedUri, finished, null, null
                     )
 
                     runOnUiThread {
@@ -988,9 +1309,7 @@ class MainActivity : Activity() {
 
                         isSaving = false
                         setControlsEnabled(true)
-
-                        statusText.text =
-                            "Save failed: ${e.message}"
+                        statusText.text = "Save failed: ${e.message}"
                     }
                 }
             }
@@ -999,11 +1318,7 @@ class MainActivity : Activity() {
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "image/jpeg"
-
-                putExtra(
-                    Intent.EXTRA_TITLE,
-                    "Enhanced_Photo.jpg"
-                )
+                putExtra(Intent.EXTRA_TITLE, "Enhanced_Photo.jpg")
             }
 
             startActivityForResult(intent, SAVE_DOCUMENT)
@@ -1022,8 +1337,7 @@ class MainActivity : Activity() {
         executor.execute {
             try {
                 val output = contentResolver.openOutputStream(
-                    uri,
-                    "w"
+                    uri, "w"
                 ) ?: throw Exception("Could not open output")
 
                 val success = output.use {
@@ -1043,7 +1357,6 @@ class MainActivity : Activity() {
 
                     isSaving = false
                     setControlsEnabled(true)
-
                     statusText.text = "Photo saved successfully!"
 
                     Toast.makeText(
@@ -1059,9 +1372,7 @@ class MainActivity : Activity() {
 
                     isSaving = false
                     setControlsEnabled(true)
-
-                    statusText.text =
-                        "Save failed: ${e.message}"
+                    statusText.text = "Save failed: ${e.message}"
                 }
             }
         }
@@ -1075,11 +1386,7 @@ class MainActivity : Activity() {
         resultCode: Int,
         data: Intent?
     ) {
-        super.onActivityResult(
-            requestCode,
-            resultCode,
-            data
-        )
+        super.onActivityResult(requestCode, resultCode, data)
 
         if (requestCode == PICK_IMAGE && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
@@ -1088,19 +1395,14 @@ class MainActivity : Activity() {
                 val flags =
                     data.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
 
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    flags
-                )
+                contentResolver.takePersistableUriPermission(uri, flags)
             } catch (_: Exception) {
             }
 
             selectedImage = uri
 
             enhancedBitmap?.let {
-                if (!it.isRecycled) {
-                    it.recycle()
-                }
+                if (!it.isRecycled) it.recycle()
             }
 
             enhancedBitmap = null
@@ -1115,7 +1417,7 @@ class MainActivity : Activity() {
             saveButton.isEnabled = false
 
             statusText.text =
-                "Original photo loaded. Ready for AI enhancement!"
+                "Original photo loaded. Add editing instructions or use the default enhancement!"
 
             return
         }
@@ -1147,9 +1449,7 @@ class MainActivity : Activity() {
         }
 
         enhancedBitmap?.let {
-            if (!it.isRecycled) {
-                it.recycle()
-            }
+            if (!it.isRecycled) it.recycle()
         }
 
         enhancedBitmap = null
@@ -1231,10 +1531,7 @@ class ZoomableImageView(
                         resetZoom()
                     } else {
                         displayMatrix.postScale(
-                            2.5f,
-                            2.5f,
-                            e.x,
-                            e.y
+                            2.5f, 2.5f, e.x, e.y
                         )
 
                         currentScale = 2.5f
