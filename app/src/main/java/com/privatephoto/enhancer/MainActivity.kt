@@ -580,13 +580,6 @@ class MainActivity : Activity() {
     }
 
     // REAL-ESRGAN OVERLAPPING TILE INFERENCE ENGINE
-    //
-    // Input: 128 × 128 × 3 RGB float
-    // Output: 512 × 512 × 3 RGB float
-    //
-    // Tiles overlap by 32 input pixels.
-    // Only the central, non-overlapping portions are copied.
-    // This helps reduce visible tile boundaries.
 
     private fun runRealEsrgan(
         source: Bitmap,
@@ -678,8 +671,6 @@ class MainActivity : Activity() {
                 for (xIndex in xStarts.indices) {
                     val tileX = xStarts[xIndex]
 
-                    // Prepare the 128 × 128 RGB input tile.
-
                     for (y in 0 until TILE_SIZE) {
                         for (x in 0 until TILE_SIZE) {
 
@@ -695,8 +686,6 @@ class MainActivity : Activity() {
                             var r = Color.red(pixel) / 255f
                             var g = Color.green(pixel) / 255f
                             var b = Color.blue(pixel) / 255f
-
-                            // Apply selected strength before inference.
 
                             r = (
                                 (r - 0.5f) * contrast + 0.5f
@@ -736,8 +725,6 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    // Run AI inference.
-
                     inputBuffer.writeFloat(inputData)
                     model.run(inputBuffers, outputBuffers)
 
@@ -749,8 +736,6 @@ class MainActivity : Activity() {
                                 "Expected: $OUTPUT_ELEMENTS"
                         )
                     }
-
-                    // Convert model output into bitmap pixels.
 
                     val tilePixels = IntArray(
                         OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE
@@ -779,9 +764,6 @@ class MainActivity : Activity() {
                             ] = Color.rgb(r, g, b)
                         }
                     }
-
-                    // Calculate crop boundaries between overlapping tiles.
-                    // This keeps each output area from being written twice.
 
                     val cropLeft = if (xIndex == 0) {
                         0
@@ -839,7 +821,17 @@ class MainActivity : Activity() {
                 }
             }
 
-            return destination
+            // NEW: APPLY STRONGER DETAIL SHARPENING
+
+            val sharpened = applySharpening(
+                destination,
+                strength
+            )
+
+            destination.recycle()
+            resultBitmap = null
+
+            return sharpened
 
         } catch (e: Exception) {
             resultBitmap?.let {
@@ -875,6 +867,103 @@ class MainActivity : Activity() {
             } catch (_: Exception) {
             }
         }
+    }
+
+    // STRONGER POST-AI SHARPENING ENGINE
+
+    private fun applySharpening(
+        bitmap: Bitmap,
+        strength: String
+    ): Bitmap {
+
+        val amount = when (strength) {
+            "Low" -> 0.25f
+            "Balanced" -> 0.55f
+            "High" -> 0.85f
+            "Ultra" -> 1.10f
+            else -> 0.55f
+        }
+
+        val width = bitmap.width
+        val height = bitmap.height
+
+        val pixels = IntArray(width * height)
+
+        bitmap.getPixels(
+            pixels,
+            0,
+            width,
+            0,
+            0,
+            width,
+            height
+        )
+
+        val output = Bitmap.createBitmap(
+            width,
+            height,
+            Bitmap.Config.ARGB_8888
+        )
+
+        val row = IntArray(width)
+
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+
+                val center = pixels[y * width + x]
+
+                var redSum = 0
+                var greenSum = 0
+                var blueSum = 0
+
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+
+                        val px = (x + dx).coerceIn(0, width - 1)
+                        val py = (y + dy).coerceIn(0, height - 1)
+
+                        val pixel = pixels[py * width + px]
+
+                        redSum += Color.red(pixel)
+                        greenSum += Color.green(pixel)
+                        blueSum += Color.blue(pixel)
+                    }
+                }
+
+                val blurRed = redSum / 9f
+                val blurGreen = greenSum / 9f
+                val blurBlue = blueSum / 9f
+
+                val r = (
+                    Color.red(center) +
+                        amount * (Color.red(center) - blurRed)
+                    ).roundToInt().coerceIn(0, 255)
+
+                val g = (
+                    Color.green(center) +
+                        amount * (Color.green(center) - blurGreen)
+                    ).roundToInt().coerceIn(0, 255)
+
+                val b = (
+                    Color.blue(center) +
+                        amount * (Color.blue(center) - blurBlue)
+                    ).roundToInt().coerceIn(0, 255)
+
+                row[x] = Color.rgb(r, g, b)
+            }
+
+            output.setPixels(
+                row,
+                0,
+                width,
+                0,
+                y,
+                width,
+                1
+            )
+        }
+
+        return output
     }
 
     // SAVE ENHANCED PHOTO
