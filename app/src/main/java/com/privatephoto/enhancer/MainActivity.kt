@@ -398,9 +398,7 @@ class MainActivity : Activity() {
         val stream = contentResolver.openInputStream(uri)
             ?: throw Exception("Cannot open selected photo")
 
-        return stream.use {
-            it.readBytes()
-        }
+        return stream.use { it.readBytes() }
     }
 
     private fun testAiModel() {
@@ -437,9 +435,7 @@ class MainActivity : Activity() {
                     throw Exception("Unexpected model tensor count")
                 }
 
-                val testInput = FloatArray(INPUT_ELEMENTS) { 0.5f }
-
-                inputs[0].writeFloat(testInput)
+                inputs[0].writeFloat(FloatArray(INPUT_ELEMENTS) { 0.5f })
                 model.run(inputs, outputs)
 
                 val testOutput = outputs[0].readFloat()
@@ -448,9 +444,7 @@ class MainActivity : Activity() {
                     throw Exception("Unexpected output size")
                 }
 
-                if (testOutput.any {
-                    it.isNaN() || it.isInfinite()
-                }) {
+                if (testOutput.any { it.isNaN() || it.isInfinite() }) {
                     throw Exception("Invalid model output")
                 }
 
@@ -477,7 +471,6 @@ class MainActivity : Activity() {
 
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
-
                 isModelTesting = false
                 setControlsEnabled(true)
                 statusText.text = resultMessage
@@ -505,43 +498,41 @@ class MainActivity : Activity() {
 
         when (strength) {
             "Low" -> {
-                settings.contrast = 1.04f
+                settings.contrast = 1.03f
                 settings.saturation = 1.02f
                 settings.sharpen = 0.25f
             }
             "Balanced" -> {
-                settings.contrast = 1.08f
-                settings.saturation = 1.06f
-                settings.sharpen = 0.45f
+                settings.contrast = 1.06f
+                settings.saturation = 1.04f
+                settings.sharpen = 0.50f
             }
             "High" -> {
-                settings.contrast = 1.13f
-                settings.saturation = 1.10f
-                settings.sharpen = 0.65f
+                settings.contrast = 1.10f
+                settings.saturation = 1.07f
+                settings.sharpen = 0.75f
             }
             "Ultra" -> {
-                settings.contrast = 1.18f
-                settings.saturation = 1.14f
-                settings.sharpen = 0.85f
+                settings.contrast = 1.14f
+                settings.saturation = 1.10f
+                settings.sharpen = 0.95f
             }
         }
 
         when (mode) {
             "Natural Restore" -> {
-                settings.noiseReduction = 0.38f
-                settings.sharpen *= 0.72f
+                settings.noiseReduction = 0.40f
+                settings.sharpen *= 0.65f
                 settings.contrast *= 0.97f
                 settings.saturation *= 0.98f
             }
-
             "Balanced" -> {
-                settings.noiseReduction = 0.14f
+                settings.noiseReduction = 0.16f
             }
-
             "Maximum Detail" -> {
-                settings.noiseReduction = 0.02f
-                settings.sharpen *= 1.40f
-                settings.contrast *= 1.04f
+                settings.noiseReduction = 0.04f
+                settings.sharpen *= 1.35f
+                settings.contrast *= 1.03f
             }
         }
 
@@ -576,7 +567,7 @@ class MainActivity : Activity() {
             text.contains("more colour") ||
             text.contains("more color") ||
             text.contains("increase saturation")
-        ) settings.saturation += 0.20f
+        ) settings.saturation += 0.18f
 
         if (
             text.contains("less saturation") ||
@@ -631,27 +622,6 @@ class MainActivity : Activity() {
                 (settings.noiseReduction + 0.20f).coerceAtMost(0.65f)
         }
 
-        settings.brightness =
-            settings.brightness.coerceIn(-0.30f, 0.30f)
-
-        settings.contrast =
-            settings.contrast.coerceIn(0.75f, 1.55f)
-
-        settings.saturation =
-            settings.saturation.coerceIn(0f, 1.60f)
-
-        settings.warmth =
-            settings.warmth.coerceIn(-0.25f, 0.25f)
-
-        settings.sharpen =
-            settings.sharpen.coerceIn(0f, 1.5f)
-
-        settings.noiseReduction =
-            settings.noiseReduction.coerceIn(0f, 0.70f)
-
-        return settings
-    }
-
     private fun applyLocalEditing(
         source: Bitmap,
         settings: EditSettings
@@ -672,118 +642,112 @@ class MainActivity : Activity() {
         val outputRow = IntArray(width)
 
         for (y in 0 until height) {
-
             val previousY = (y - 1).coerceAtLeast(0)
             val nextY = (y + 1).coerceAtMost(height - 1)
 
-            source.getPixels(
-                previous, 0, width, 0, previousY, width, 1
-            )
-            source.getPixels(
-                current, 0, width, 0, y, width, 1
-            )
-            source.getPixels(
-                next, 0, width, 0, nextY, width, 1
-            )
+            source.getPixels(previous, 0, width, 0, previousY, width, 1)
+            source.getPixels(current, 0, width, 0, y, width, 1)
+            source.getPixels(next, 0, width, 0, nextY, width, 1)
 
             for (x in 0 until width) {
-
                 val center = current[x]
                 val left = current[(x - 1).coerceAtLeast(0)]
                 val right = current[(x + 1).coerceAtMost(width - 1)]
                 val top = previous[x]
                 val bottom = next[x]
 
-                val centerR = Color.red(center).toFloat()
-                val centerG = Color.green(center).toFloat()
-                val centerB = Color.blue(center).toFloat()
+                val r = Color.red(center).toFloat()
+                val g = Color.green(center).toFloat()
+                val b = Color.blue(center).toFloat()
 
-                val neighborsR = (
+                val nr = (
                     Color.red(left) + Color.red(right) +
                     Color.red(top) + Color.red(bottom)
                 ) / 4f
 
-                val neighborsG = (
+                val ng = (
                     Color.green(left) + Color.green(right) +
                     Color.green(top) + Color.green(bottom)
                 ) / 4f
 
-                val neighborsB = (
+                val nb = (
                     Color.blue(left) + Color.blue(right) +
                     Color.blue(top) + Color.blue(bottom)
                 ) / 4f
 
-                // Edge-aware noise reduction:
-                // reduce small pixel variations while protecting edges.
-                val difference =
-                    (
-                        abs(centerR - neighborsR) +
-                        abs(centerG - neighborsG) +
-                        abs(centerB - neighborsB)
-                    ) / 3f
+                val difference = (
+                    abs(r - nr) + abs(g - ng) + abs(b - nb)
+                ) / 3f
 
+                // Protect edges while reducing noise in smooth areas.
                 val edgeProtection =
                     (1f - difference / 48f).coerceIn(0f, 1f)
 
-                val denoiseAmount =
-                    settings.noiseReduction * edgeProtection
+                val denoise = settings.noiseReduction * edgeProtection
 
-                val cleanR =
-                    centerR + (neighborsR - centerR) * denoiseAmount
+                val cleanR = r + (nr - r) * denoise
+                val cleanG = g + (ng - g) * denoise
+                val cleanB = b + (nb - b) * denoise
 
-                val cleanG =
-                    centerG + (neighborsG - centerG) * denoiseAmount
+                // Controlled sharpening.
+                val edgeStrength =
+                    (difference / 40f).coerceIn(0.15f, 1f)
 
-                val cleanB =
-                    centerB + (neighborsB - centerB) * denoiseAmount
+                var outR = cleanR +
+                    settings.sharpen * edgeStrength * (cleanR - nr)
 
-                // Sharpen the cleaned pixel against its neighborhood.
-                var r = cleanR +
-                    settings.sharpen * (cleanR - neighborsR)
+                var outG = cleanG +
+                    settings.sharpen * edgeStrength * (cleanG - ng)
 
-                var g = cleanG +
-                    settings.sharpen * (cleanG - neighborsG)
+                var outB = cleanB +
+                    settings.sharpen * edgeStrength * (cleanB - nb)
 
-                var b = cleanB +
-                    settings.sharpen * (cleanB - neighborsB)
-
-                r = (r - 127.5f) * settings.contrast +
+                // Contrast and brightness.
+                outR = (outR - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
 
-                g = (g - 127.5f) * settings.contrast +
+                outG = (outG - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
 
-                b = (b - 127.5f) * settings.contrast +
+                outB = (outB - 127.5f) * settings.contrast +
                     127.5f + settings.brightness * 255f
 
-                r += settings.warmth * 255f
-                b -= settings.warmth * 255f
+                // Gentle warmth adjustment.
+                outR += settings.warmth * 100f
+                outB -= settings.warmth * 100f
 
-                val gray =
-                    0.299f * r +
-                    0.587f * g +
-                    0.114f * b
+                // Protect bright highlights from excessive contrast.
+                val luminance =
+                    0.299f * outR +
+                    0.587f * outG +
+                    0.114f * outB
 
-                r = gray + (r - gray) * settings.saturation
-                g = gray + (g - gray) * settings.saturation
-                b = gray + (b - gray) * settings.saturation
+                val highlightProtection =
+                    (1f - ((luminance - 210f) / 45f).coerceIn(0f, 1f))
+
+                val gray = luminance
+
+                val saturation = 1f +
+                    (settings.saturation - 1f) * highlightProtection
+
+                outR = gray + (outR - gray) * saturation
+                outG = gray + (outG - gray) * saturation
+                outB = gray + (outB - gray) * saturation
 
                 if (settings.grayscale) {
-                    r = gray
-                    g = gray
-                    b = gray
+                    outR = gray
+                    outG = gray
+                    outB = gray
                 }
 
                 outputRow[x] = Color.rgb(
-                    r.roundToInt().coerceIn(0, 255),
-                    g.roundToInt().coerceIn(0, 255),
-                    b.roundToInt().coerceIn(0, 255)
+                    outR.roundToInt().coerceIn(0, 255),
+                    outG.roundToInt().coerceIn(0, 255),
+                    outB.roundToInt().coerceIn(0, 255)
                 )
             }
 
-            output.setPixels(
-                outputRow, 0, width, 0, y, width, 1
-            )
+            output.setPixels(outputRow, 0, width, 0, y, width, 1)
         }
 
         return output
@@ -798,8 +762,7 @@ class MainActivity : Activity() {
             val next = starts.last() + TILE_STRIDE
 
             if (next + TILE_SIZE >= length) {
-                val finalStart =
-                    (length - TILE_SIZE).coerceAtLeast(0)
+                val finalStart = (length - TILE_SIZE).coerceAtLeast(0)
 
                 if (finalStart > starts.last()) {
                     starts.add(finalStart)
@@ -876,16 +839,16 @@ class MainActivity : Activity() {
 
             val contrast = when (strength) {
                 "Low" -> 1.00f
-                "High" -> 1.08f
-                "Ultra" -> 1.12f
-                else -> 1.04f
+                "High" -> 1.06f
+                "Ultra" -> 1.09f
+                else -> 1.03f
             }
 
             val saturation = when (strength) {
                 "Low" -> 1.00f
-                "High" -> 1.08f
-                "Ultra" -> 1.12f
-                else -> 1.04f
+                "High" -> 1.04f
+                "Ultra" -> 1.06f
+                else -> 1.02f
             }
 
             for (yIndex in yStarts.indices) {
@@ -896,7 +859,6 @@ class MainActivity : Activity() {
 
                     for (y in 0 until TILE_SIZE) {
                         for (x in 0 until TILE_SIZE) {
-
                             val sourceX =
                                 (tileX + x).coerceAtMost(width - 1)
 
@@ -920,9 +882,7 @@ class MainActivity : Activity() {
                                 .coerceIn(0f, 1f)
 
                             val gray =
-                                0.299f * r +
-                                0.587f * g +
-                                0.114f * b
+                                0.299f * r + 0.587f * g + 0.114f * b
 
                             r = (gray + (r - gray) * saturation)
                                 .coerceIn(0f, 1f)
@@ -957,25 +917,20 @@ class MainActivity : Activity() {
 
                     for (y in 0 until OUTPUT_TILE_SIZE) {
                         for (x in 0 until OUTPUT_TILE_SIZE) {
-
                             val index =
                                 (y * OUTPUT_TILE_SIZE + x) * CHANNELS
 
-                            val r = (
-                                aiOutput[index] * 255f
-                            ).roundToInt().coerceIn(0, 255)
+                            val r = (aiOutput[index] * 255f)
+                                .roundToInt().coerceIn(0, 255)
 
-                            val g = (
-                                aiOutput[index + 1] * 255f
-                            ).roundToInt().coerceIn(0, 255)
+                            val g = (aiOutput[index + 1] * 255f)
+                                .roundToInt().coerceIn(0, 255)
 
-                            val b = (
-                                aiOutput[index + 2] * 255f
-                            ).roundToInt().coerceIn(0, 255)
+                            val b = (aiOutput[index + 2] * 255f)
+                                .roundToInt().coerceIn(0, 255)
 
-                            tilePixels[
-                                y * OUTPUT_TILE_SIZE + x
-                            ] = Color.rgb(r, g, b)
+                            tilePixels[y * OUTPUT_TILE_SIZE + x] =
+                                Color.rgb(r, g, b)
                         }
                     }
 
@@ -1051,11 +1006,9 @@ class MainActivity : Activity() {
             inputBuffers.forEach {
                 try { it.close() } catch (_: Exception) {}
             }
-
             outputBuffers.forEach {
                 try { it.close() } catch (_: Exception) {}
             }
-
             try { model?.close() } catch (_: Exception) {}
             try { environment?.close() } catch (_: Exception) {}
         }
@@ -1120,7 +1073,6 @@ class MainActivity : Activity() {
 
                     aiBitmap = runRealEsrgan(source, strength) {
                         completed, total ->
-
                         runOnUiThread {
                             if (!isFinishing && !isDestroyed) {
                                 statusText.text =
@@ -1128,31 +1080,24 @@ class MainActivity : Activity() {
                             }
                         }
                     }
-
                 } finally {
                     source.recycle()
                 }
 
                 val settings = interpretInstructions(
-                    strength,
-                    mode,
-                    instructions
+                    strength, mode, instructions
                 )
 
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
-                        statusText.text =
-                            "Applying $mode editing..."
+                        statusText.text = "Applying $mode editing..."
                     }
                 }
 
                 val aiResult = aiBitmap
                     ?: throw Exception("AI did not produce an image")
 
-                finalBitmap = applyLocalEditing(
-                    aiResult,
-                    settings
-                )
+                finalBitmap = applyLocalEditing(aiResult, settings)
 
                 aiResult.recycle()
                 aiBitmap = null
@@ -1675,3 +1620,13 @@ class ZoomableImageView(
         fitImage()
     }
 }
+
+        settings.brightness = settings.brightness.coerceIn(-0.30f, 0.30f)
+        settings.contrast = settings.contrast.coerceIn(0.75f, 1.55f)
+        settings.saturation = settings.saturation.coerceIn(0f, 1.60f)
+        settings.warmth = settings.warmth.coerceIn(-0.25f, 0.25f)
+        settings.sharpen = settings.sharpen.coerceIn(0f, 1.5f)
+        settings.noiseReduction = settings.noiseReduction.coerceIn(0f, 0.70f)
+
+        return settings
+    }
