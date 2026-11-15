@@ -7,19 +7,23 @@ import base64
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response
 from openai import OpenAI
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 app = FastAPI(title="Private Photo Enhancer API")
 
 MODEL = "gpt-image-2.5-sunburst"
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
+MAX_IMAGE_PIXELS = 40_000_000
+
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+
 
 @app.get("/")
 def home():
     return {
         "status": "online",
         "service": "Private Photo Enhancer",
-        "version": "1.1"
+        "version": "1.2"
     }
 
 
@@ -98,14 +102,28 @@ async def enhance(
         )
 
     try:
-        source = Image.open(io.BytesIO(image_bytes))
-        source = ImageOps.exif_transpose(source)
-        source = source.convert("RGB")
+        with Image.open(io.BytesIO(image_bytes)) as opened:
+            opened.verify()
+
+        with Image.open(io.BytesIO(image_bytes)) as opened:
+            source = ImageOps.exif_transpose(opened)
+            source.load()
+
+            if source.width * source.height > MAX_IMAGE_PIXELS:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Image dimensions are too large."
+                )
+
+            source = source.convert("RGB")
 
         buffer = io.BytesIO()
         source.save(buffer, format="PNG")
         buffer.seek(0)
         buffer.name = "photo.png"
+
+    except HTTPException:
+        raise
 
     except Exception:
         raise HTTPException(
@@ -114,38 +132,108 @@ async def enhance(
         )
 
     strength_instructions = {
-        "Low": "Apply subtle, natural improvements.",
-        "Balanced": (
-            "Apply strong but natural-looking improvements. "
-            "Improve clarity, lighting, color and fine details."
+        "Low": (
+            "Apply gentle photographic restoration. "
+            "Preserve the original appearance with subtle cleanup."
         ),
+
+        "Balanced": (
+            "Apply thorough but natural photographic restoration. "
+            "Improve clarity, reduce noise, correct color casts, "
+            "and recover visible fine details without overprocessing."
+        ),
+
         "High": (
             "Apply advanced photographic restoration. "
-            "Improve sharpness, lighting, texture, "
-            "color accuracy and fine details."
+            "Improve fine textures, hair definition, clothing details, "
+            "edge clarity, noise reduction and color accuracy. "
+            "Keep the result realistic and faithful to the source."
         ),
+
         "Ultra": (
-            "Apply maximum careful photographic restoration. "
-            "Recover as much authentic detail as possible, "
-            "improve clarity, texture, lighting and color "
-            "while maintaining a realistic photograph."
+            "Apply the strongest careful photographic restoration "
+            "available. Prioritize recovering authentic visible detail, "
+            "natural facial texture, hair definition, clothing texture, "
+            "and fine image structure. Reduce blur, noise and compression "
+            "artifacts as much as reasonably possible. "
+            "Correct color casts and improve tonal balance. "
+            "Avoid excessive sharpening, artificial skin, halos, "
+            "oversaturated colors and invented details."
         )
     }
 
-    instructions = (
-        "Enhance the supplied photograph. "
-        "Preserve the original person's identity, facial features, "
-        "clothing, pose and natural appearance. "
-        "Do not invent facial details or change identity. "
-        "Keep people appropriately clothed. "
-        "Do not create nude images or remove clothing. "
-        "Preserve realistic photographic quality. "
+    instructions = """
+You are a professional photographic restoration system.
+
+Your task is to restore and enhance the supplied photograph,
+not to redesign it or create a different photograph.
+
+IDENTITY PRESERVATION:
+Preserve the exact identity and recognizable appearance of
+every person in the original photograph.
+
+Do not change facial proportions, eye shape, nose, mouth,
+jawline, expression, hairstyle, age or other identifying features.
+
+Do not beautify, reshape or artificially reconstruct faces.
+
+FACIAL DETAIL:
+Improve the clarity of naturally visible facial features.
+Preserve realistic skin texture and natural imperfections.
+Avoid plastic-looking skin, excessive smoothing and
+artificially painted facial details.
+
+IMAGE SHARPNESS:
+Improve genuine visible edges and fine textures.
+Reduce motion blur and softness where recoverable.
+Avoid excessive sharpening, ringing and unnatural outlines.
+
+COLOR RESTORATION:
+Correct unwanted red, orange, yellow or other color casts.
+Restore natural-looking skin tones.
+Maintain believable clothing and background colors.
+Avoid excessive saturation and artificial color grading.
+
+LIGHTING:
+Improve exposure and tonal balance.
+Recover highlight detail where information is available.
+Improve shadow visibility without making the photograph flat.
+Avoid excessive brightness and blown-out whites.
+
+NOISE REDUCTION:
+Reduce grain, digital noise and compression artifacts.
+Preserve useful texture rather than smoothing everything.
+
+DETAIL PRESERVATION:
+Improve naturally visible hair, clothing, objects and
+background textures without changing their original shapes.
+
+SCENE PRESERVATION:
+Keep the original people, objects, clothing, pose,
+background, composition and camera perspective unchanged.
+
+IMPORTANT:
+Do not add objects or remove objects.
+Do not invent information that cannot be recovered.
+Do not change the person's identity.
+Do not turn the photograph into a painting, illustration,
+cartoon or synthetic-looking image.
+
+The final result must look like a naturally restored
+photograph of the same original scene.
+"""
+
+    instructions += (
+        "\n\nSELECTED ENHANCEMENT STRENGTH:\n"
         + strength_instructions[strength]
     )
 
     if prompt:
         instructions += (
-            "\nAdditional requested edits: " + prompt
+            "\n\nADDITIONAL USER INSTRUCTIONS:\n"
+            + prompt
+            + "\nFollow these instructions while preserving "
+              "the original photograph and people's identities."
         )
 
     try:
@@ -162,8 +250,13 @@ async def enhance(
         if not result.data or not result.data[0].b64_json:
             raise RuntimeError("No enhanced image was returned.")
 
-        image_data = result.data[0].b64_json
-        output_bytes = base64.b64decode(image_data)
+        output_bytes = base64.b64decode(
+            result.data[0].b64_json,
+            validate=True
+        )
+
+        if not output_bytes:
+            raise RuntimeError("The returned image was empty.")
 
         return Response(
             content=output_bytes,
