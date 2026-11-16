@@ -1,19 +1,21 @@
-
-import os
 import io
-import re
-import base64
+import os
+import tempfile
+from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import Response
-from openai import OpenAI
 from PIL import Image, ImageOps, UnidentifiedImageError
+from gradio_client import Client, handle_file
 
 app = FastAPI(title="Private Photo Enhancer API")
 
-MODEL = "gpt-image-2.5-sunburst"
+# Public community Space using GFPGAN face restoration + Real-ESRGAN background upscaling.
+# The user's Hugging Face token is read only from Render's secret environment.
+HF_SPACE = "Gemini899/GFPGAN-Fix"
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
-MAX_IMAGE_PIXELS = 40_000_000
+MAX_IMAGE_PIXELS = 20_000_000
+MAX_IMAGE_SIDE = 3000
 
 Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
@@ -23,13 +25,27 @@ def home():
     return {
         "status": "online",
         "service": "Private Photo Enhancer",
-        "version": "1.2"
+        "version": "2.0",
+        "provider": "Hugging Face GFPGAN + Real-ESRGAN"
     }
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+        "provider_configured": bool(os.getenv("HF_TOKEN"))
+    }
+
+
+def _result_file_path(value):
+    """Extract a local downloaded path from Gradio's file/image result."""
+    if isinstance(value, (str, Path)):
+        return str(value)
+    if isinstance(value, dict):
+        return value.get("path") or value.get("name")
+    path = getattr(value, "path", None)
+    return str(path) if path else None
 
 
 @app.post(
@@ -38,14 +54,7 @@ def health():
     responses={
         200: {
             "description": "Enhanced PNG image",
-            "content": {
-                "image/png": {
-                    "schema": {
-                        "type": "string",
-                        "format": "binary"
-                    }
-                }
-            }
+            "content": {"image/png": {"schema": {"type": "string", "format": "binary"}}}
         }
     }
 )
@@ -54,47 +63,20 @@ async def enhance(
     prompt: str = Form(""),
     strength: str = Form("Balanced")
 ):
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
+    token = os.getenv("HF_TOKEN")
+    if not token:
         raise HTTPException(
-            status_code=500,
-            detail="OpenAI API key is not configured."
+            status_code=503,
+            detail="Hugging Face is not configured on the server."
         )
 
-    quality_settings = {
-        "Low": "low",
-        "Balanced": "medium",
-        "High": "high",
-        "Ultra": "xhigh"
-    }
-
-    if strength not in quality_settings:
+    if strength not in {"Low", "Balanced", "High", "Ultra"}:
         strength = "Balanced"
 
-    prompt = prompt.strip()
-
-    if len(prompt) > 2000:
-        raise HTTPException(
-            status_code=400,
-            detail="Editing instructions are too long."
-        )
-
-    unsafe_terms = re.compile(
-        r"\b(undress|remove clothing|remove clothes|"
-        r"make nude|make naked|topless|"
-        r"see through clothes|strip naked)\b",
-        re.IGNORECASE
-    )
-
-    if unsafe_terms.search(prompt):
-        raise HTTPException(
-            status_code=400,
-            detail="This type of clothing-removal edit is not supported."
-        )
+    if len(prompt.strip()) > 2000:
+        raise HTTPException(status_code=400, detail="Editing instructions are too long.")
 
     image_bytes = await image.read()
-
     if not image_bytes or len(image_bytes) > MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=400,
@@ -104,175 +86,86 @@ async def enhance(
     try:
         with Image.open(io.BytesIO(image_bytes)) as opened:
             opened.verify()
-
         with Image.open(io.BytesIO(image_bytes)) as opened:
-            source = ImageOps.exif_transpose(opened)
+            source = ImageOps.exif_transpose(opened).convert("RGB")
             source.load()
-
             if source.width * source.height > MAX_IMAGE_PIXELS:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Image dimensions are too large."
-                )
-
-            source = source.convert("RGB")
-
-        buffer = io.BytesIO()
-        source.save(buffer, format="PNG")
-        buffer.seek(0)
-        buffer.name = "photo.png"
-
+                raise HTTPException(status_code=400, detail="Image dimensions are too large.")
+            source.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE), Image.Resampling.LANCZOS)
     except HTTPException:
         raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(status_code=400, detail="Please upload a valid photo.")
 
-    except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="Please upload a valid photo."
-        )
+    # GFPGAN v1.3 is the gentler option; v1.4 restores more aggressively.
+    version = "v1.3" if strength == "Low" else "v1.4"
 
-    strength_instructions = {
-        "Low": (
-            "Apply gentle photographic restoration. "
-            "Preserve the original appearance with subtle cleanup."
-        ),
-
-        "Balanced": (
-            "Apply thorough but natural photographic restoration. "
-            "Improve clarity, reduce noise, correct color casts, "
-            "and recover visible fine details without overprocessing."
-        ),
-
-        "High": (
-            "Apply advanced photographic restoration. "
-            "Improve fine textures, hair definition, clothing details, "
-            "edge clarity, noise reduction and color accuracy. "
-            "Keep the result realistic and faithful to the source."
-        ),
-
-        "Ultra": (
-            "Apply the strongest careful photographic restoration "
-            "available. Prioritize recovering authentic visible detail, "
-            "natural facial texture, hair definition, clothing texture, "
-            "and fine image structure. Reduce blur, noise and compression "
-            "artifacts as much as reasonably possible. "
-            "Correct color casts and improve tonal balance. "
-            "Avoid excessive sharpening, artificial skin, halos, "
-            "oversaturated colors and invented details."
-        )
-    }
-
-    instructions = """
-You are a professional photographic restoration system.
-
-Your task is to restore and enhance the supplied photograph,
-not to redesign it or create a different photograph.
-
-IDENTITY PRESERVATION:
-Preserve the exact identity and recognizable appearance of
-every person in the original photograph.
-
-Do not change facial proportions, eye shape, nose, mouth,
-jawline, expression, hairstyle, age or other identifying features.
-
-Do not beautify, reshape or artificially reconstruct faces.
-
-FACIAL DETAIL:
-Improve the clarity of naturally visible facial features.
-Preserve realistic skin texture and natural imperfections.
-Avoid plastic-looking skin, excessive smoothing and
-artificially painted facial details.
-
-IMAGE SHARPNESS:
-Improve genuine visible edges and fine textures.
-Reduce motion blur and softness where recoverable.
-Avoid excessive sharpening, ringing and unnatural outlines.
-
-COLOR RESTORATION:
-Correct unwanted red, orange, yellow or other color casts.
-Restore natural-looking skin tones.
-Maintain believable clothing and background colors.
-Avoid excessive saturation and artificial color grading.
-
-LIGHTING:
-Improve exposure and tonal balance.
-Recover highlight detail where information is available.
-Improve shadow visibility without making the photograph flat.
-Avoid excessive brightness and blown-out whites.
-
-NOISE REDUCTION:
-Reduce grain, digital noise and compression artifacts.
-Preserve useful texture rather than smoothing everything.
-
-DETAIL PRESERVATION:
-Improve naturally visible hair, clothing, objects and
-background textures without changing their original shapes.
-
-SCENE PRESERVATION:
-Keep the original people, objects, clothing, pose,
-background, composition and camera perspective unchanged.
-
-IMPORTANT:
-Do not add objects or remove objects.
-Do not invent information that cannot be recovered.
-Do not change the person's identity.
-Do not turn the photograph into a painting, illustration,
-cartoon or synthetic-looking image.
-
-The final result must look like a naturally restored
-photograph of the same original scene.
-"""
-
-    instructions += (
-        "\n\nSELECTED ENHANCEMENT STRENGTH:\n"
-        + strength_instructions[strength]
-    )
-
-    if prompt:
-        instructions += (
-            "\n\nADDITIONAL USER INSTRUCTIONS:\n"
-            + prompt
-            + "\nFollow these instructions while preserving "
-              "the original photograph and people's identities."
-        )
-
+    temp_path = None
+    client = None
     try:
-        client = OpenAI(api_key=api_key)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
+            temp_path = temp_file.name
+            source.save(temp_file, format="PNG")
 
-        result = client.images.edit(
-            model=MODEL,
-            image=buffer,
-            prompt=instructions,
-            quality=quality_settings[strength],
-            output_format="png"
+        client = Client(
+            HF_SPACE,
+            token=token,
+            max_workers=1,
+            verbose=False,
+            analytics_enabled=False
+        )
+        # The Space's API takes an image, GFPGAN version, and output scale.
+        result = client.predict(
+            handle_file(temp_path),
+            version,
+            2,
+            api_name="/predict"
         )
 
-        if not result.data or not result.data[0].b64_json:
-            raise RuntimeError("No enhanced image was returned.")
+        if not isinstance(result, (list, tuple)) or not result:
+            raise RuntimeError("The restoration service returned no image.")
 
-        output_bytes = base64.b64decode(
-            result.data[0].b64_json,
-            validate=True
-        )
+        # The Space returns a rendered image plus a downloadable output file.
+        candidates = list(result[1:]) + [result[0]]
+        output_bytes = None
+        for candidate in candidates:
+            path = _result_file_path(candidate)
+            if path and os.path.isfile(path):
+                with Image.open(path) as restored:
+                    buffer = io.BytesIO()
+                    restored.convert("RGB").save(buffer, format="PNG")
+                    output_bytes = buffer.getvalue()
+                    break
 
-        if not output_bytes:
-            raise RuntimeError("The returned image was empty.")
+        if output_bytes is None:
+            raise RuntimeError("The restoration service did not return a readable image.")
 
         return Response(
             content=output_bytes,
             media_type="image/png",
             headers={
                 "Cache-Control": "no-store",
-                "Content-Disposition": (
-                    'inline; filename="enhanced_photo.png"'
-                )
+                "Content-Disposition": 'inline; filename="enhanced_photo.png"',
+                "X-Enhancement-Provider": "Hugging Face GFPGAN + Real-ESRGAN"
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as error:
-        print("Enhancement error:", str(error))
-
+        print("Hugging Face enhancement error:", repr(error))
         raise HTTPException(
             status_code=502,
-            detail="AI enhancement failed. Please try again."
+            detail="Free cloud restoration is temporarily unavailable or its daily queue is busy. Try again later or use Offline Enhance."
         )
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
