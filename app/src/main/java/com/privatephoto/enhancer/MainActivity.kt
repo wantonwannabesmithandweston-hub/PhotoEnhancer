@@ -95,6 +95,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Automatically use face restoration when its model is already installed.
+        isFaceRestoreEnabled = isFaceRestoreModelInstalled()
 
         val scroll = ScrollView(this)
 
@@ -328,7 +330,7 @@ class MainActivity : Activity() {
         downloadFaceModelButton.setOnClickListener { downloadFaceRestoreModel() }
 
         faceRestoreToggleButton = Button(this).apply {
-            text = "Face Restoration: OFF"
+            text = if (isFaceRestoreEnabled) "Face Restoration: ON" else "Face Restoration: OFF"
         }
         layout.addView(faceRestoreToggleButton)
         faceRestoreToggleButton.setOnClickListener {
@@ -413,9 +415,11 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     isDownloadingFaceModel = false
+                    isFaceRestoreEnabled = true
+                    faceRestoreToggleButton.text = "Face Restoration: ON"
                     downloadFaceModelButton.text = "Face Restore Model Ready"
                     setControlsEnabled(true)
-                    statusText.text = "Face model downloaded (${file.length() / (1024L * 1024L)} MB). It is stored on this phone. The next step is connecting it to face detection and enhancement."
+                    statusText.text = "Face restoration is ready and enabled. GFPGAN will run after photo upscaling on this phone."
                     Toast.makeText(this, "Face model downloaded successfully!", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
@@ -1147,6 +1151,7 @@ class MainActivity : Activity() {
         executor.execute {
             var aiBitmap: Bitmap? = null
             var finalBitmap: Bitmap? = null
+            var detectedFaceCount = 0
 
             try {
                 val bytes = readPhotoBytes(uri)
@@ -1208,16 +1213,17 @@ class MainActivity : Activity() {
                             val faceResult = GfpganFaceRestorer.restore(
                                 applicationContext, base, source, strength
                             ) { completed, total ->
+                                detectedFaceCount = total
                                 runOnUiThread {
-                                    if (!isFinishing && !isDestroyed) statusText.text = "Restoring face $completed of $total..."
+                                    if (!isFinishing && !isDestroyed) {
+                                        statusText.text = if (total == 0) "No faces detected; finishing photo enhancement..." else "Restoring face $completed of $total..."
+                                    }
                                 }
                             }
                             base.recycle()
                             aiBitmap = faceResult
                         } catch (faceError: Exception) {
-                            runOnUiThread {
-                                if (!isFinishing && !isDestroyed) statusText.text = "Face restoration unavailable (${faceError.message}). Continuing with standard AI enhancement..."
-                            }
+                            throw IllegalStateException("GFPGAN face restoration failed: ${faceError.message}", faceError)
                         }
                     }
                 } finally {
@@ -1264,8 +1270,10 @@ class MainActivity : Activity() {
                     isProcessing = false
                     setControlsEnabled(true)
 
-                    statusText.text = if (isFaceRestoreEnabled) {
-                        "Complete! 4× AI upscale with optional face restoration • $mode • $strength strength."
+                    statusText.text = if (isFaceRestoreEnabled && detectedFaceCount > 0) {
+                        "Complete! 4× AI upscale + GFPGAN restored $detectedFaceCount face(s) • $mode • $strength strength."
+                    } else if (isFaceRestoreEnabled) {
+                        "Complete! 4× AI upscale. No detectable face landmarks were found, so face restoration was skipped."
                     } else {
                         "Complete! 4× AI upscale • $mode • $strength strength."
                     }
