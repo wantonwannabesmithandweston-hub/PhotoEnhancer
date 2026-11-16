@@ -1,10 +1,11 @@
 Private Photo Enhancer — Third-Party Notices
 
-Real-ESRGAN x4plus TFLite model
-The optional on-device photographic upscaling model is downloaded only when the user requests it.
-Model file: real_esrgan_x4plus_f32.tflite
-Source: https://huggingface.co/Mogfbkx/pixellift-models
-Upstream model: Qualcomm AI Hub Real-ESRGAN-x4plus v0.60.0
+Real-ESRGAN models
+This notice applies to both Real-ESRGAN model files distributed with or downloaded by this app:
+- Real-ESRGAN-General-x4v3.tflite (bundled in the app)
+- real_esrgan_x4plus_f32.tflite (optional photographic model downloaded only when requested)
+
+The optional model source is https://huggingface.co/Mogfbkx/pixellift-models and its upstream model is Qualcomm AI Hub Real-ESRGAN-x4plus v0.60.0.
 Original project: https://github.com/xinntao/Real-ESRGAN
 
 BSD 3-Clause License
