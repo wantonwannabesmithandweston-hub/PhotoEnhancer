@@ -312,7 +312,7 @@ class MainActivity : Activity() {
         testAiButton = Button(this).apply {
             text = "Test AI Model"
         }
-        layout.addView(testAiButton)
+        advancedSettingsLayout.addView(testAiButton)
 
         testAiButton.setOnClickListener {
             testAiModel()
@@ -326,13 +326,13 @@ class MainActivity : Activity() {
             }
             isEnabled = !isFaceRestoreModelInstalled()
         }
-        layout.addView(downloadFaceModelButton)
+        advancedSettingsLayout.addView(downloadFaceModelButton)
         downloadFaceModelButton.setOnClickListener { downloadFaceRestoreModel() }
 
         faceRestoreToggleButton = Button(this).apply {
             text = if (isFaceRestoreEnabled) "Face Restoration: ON" else "Face Restoration: OFF"
         }
-        layout.addView(faceRestoreToggleButton)
+        advancedSettingsLayout.addView(faceRestoreToggleButton)
         faceRestoreToggleButton.setOnClickListener {
             if (!isFaceRestoreModelInstalled()) {
                 statusText.text = "Download the face-restoration model first."
