@@ -79,7 +79,7 @@ class MainActivity : Activity() {
         private const val TILE_SIZE = 128
         private const val OUTPUT_TILE_SIZE = 512
         private const val CHANNELS = 3
-        private const val TILE_STRIDE = 96
+        private const val TILE_STRIDE = 112
 
         private const val INPUT_ELEMENTS =
             TILE_SIZE * TILE_SIZE * CHANNELS
