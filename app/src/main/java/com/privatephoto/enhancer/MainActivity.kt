@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var modeText: TextView
     private lateinit var statusText: TextView
     private lateinit var enhanceButton: Button
+    private lateinit var cloudEnhanceButton: Button
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
@@ -88,6 +89,9 @@ class MainActivity : Activity() {
         private const val PHOTO_MODEL_BYTES = 33_724_311L
         private const val PHOTO_MODEL_SHA256 =
             "29fbb9bc95708f9f63966804a389be77fe060dbdda882402bd1592a10908d364"
+
+        private const val SERVER = "https://photoenhancer.onrender.com"
+        private const val MAX_CLOUD_UPLOAD_SIZE = 20 * 1024 * 1024
 
         private const val TILE_SIZE = 128
         private const val OUTPUT_TILE_SIZE = 512
@@ -293,6 +297,20 @@ class MainActivity : Activity() {
         }
         layout.addView(enhanceButton)
 
+        cloudEnhanceButton = Button(this).apply {
+            text = "Enhance with Free Cloud AI"
+        }
+        layout.addView(cloudEnhanceButton)
+
+        val cloudPrivacyNote = TextView(this).apply {
+            text = "Cloud mode sends this photo to Render and Hugging Face. Use Offline Enhance to keep it on your phone."
+            textSize = 12f
+            setTextColor(Color.LTGRAY)
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(4), dp(8), dp(8))
+        }
+        layout.addView(cloudPrivacyNote)
+
         statusText = TextView(this).apply {
             textSize = 16f
             setTextColor(Color.WHITE)
@@ -338,6 +356,15 @@ class MainActivity : Activity() {
             }
         }
 
+        cloudEnhanceButton.setOnClickListener {
+            val uri = selectedImage
+            if (uri == null) {
+                Toast.makeText(this, "Please upload a photo first", Toast.LENGTH_SHORT).show()
+            } else if (!isProcessing && !isSaving && !isModelTesting) {
+                enhancePhotoWithCloud(uri)
+            }
+        }
+
         saveButton.setOnClickListener {
             if (!isProcessing && !isSaving && !isModelTesting) {
                 saveEnhancedPhoto()
@@ -355,6 +382,7 @@ class MainActivity : Activity() {
 
     private fun setControlsEnabled(enabled: Boolean) {
         enhanceButton.isEnabled = enabled
+        cloudEnhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
         downloadModelButton.isEnabled =
@@ -1594,6 +1622,107 @@ class MainActivity : Activity() {
                         Toast.LENGTH_LONG
                     ).show()
                 }
+            }
+        }
+    }
+
+    private fun enhancePhotoWithCloud(uri: Uri) {
+        if (isProcessing || isSaving || isModelTesting) return
+
+        isProcessing = true
+        val strength = selectedStrength
+        val prompt = instructionsInput.text.toString().trim()
+        setControlsEnabled(false)
+        statusText.text = "Connecting to free cloud restoration... This can take a minute."
+
+        executor.execute {
+            var connection: HttpURLConnection? = null
+            var resultBitmap: Bitmap? = null
+
+            try {
+                val bytes = readPhotoBytes(uri)
+                if (bytes.isEmpty() || bytes.size > MAX_CLOUD_UPLOAD_SIZE) {
+                    throw Exception("Please choose a photo smaller than 20 MB.")
+                }
+
+                val boundary = "----PrivatePhotoEnhancer" + System.currentTimeMillis()
+                val mimeType = contentResolver.getType(uri) ?: "image/jpeg"
+                val fileName = if (mimeType == "image/png") "photo.png" else "photo.jpg"
+
+                val activeConnection = (URL("$SERVER/enhance").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 30_000
+                    readTimeout = 300_000
+                    doOutput = true
+                    setRequestProperty("Accept", "image/png")
+                    setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                }
+                connection = activeConnection
+
+                activeConnection.outputStream.use { output ->
+                    fun writeText(value: String) {
+                        output.write(value.toByteArray(Charsets.UTF_8))
+                    }
+
+                    writeText("--$boundary\\r\\n")
+                    writeText("Content-Disposition: form-data; name=\\"strength\\"\\r\\n\\r\\n")
+                    writeText("$strength\\r\\n")
+
+                    writeText("--$boundary\\r\\n")
+                    writeText("Content-Disposition: form-data; name=\\"prompt\\"\\r\\n\\r\\n")
+                    writeText("$prompt\\r\\n")
+
+                    writeText("--$boundary\\r\\n")
+                    writeText("Content-Disposition: form-data; name=\\"image\\"; filename=\\"$fileName\\"\\r\\n")
+                    writeText("Content-Type: $mimeType\\r\\n\\r\\n")
+                    output.write(bytes)
+                    writeText("\\r\\n--$boundary--\\r\\n")
+                    output.flush()
+                }
+
+                val responseCode = activeConnection.responseCode
+                if (responseCode !in 200..299) {
+                    val errorText = try {
+                        activeConnection.errorStream?.bufferedReader()?.use { it.readText() }
+                    } catch (_: Exception) { null }
+                    throw Exception("Cloud service error $responseCode. " + (errorText ?: "Please try again later."))
+                }
+
+                val responseBytes = activeConnection.inputStream.use { it.readBytes() }
+                resultBitmap = BitmapFactory.decodeByteArray(responseBytes, 0, responseBytes.size)
+                    ?: throw Exception("The cloud service returned an invalid image.")
+
+                val completed = resultBitmap
+                resultBitmap = null
+
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) {
+                        completed.recycle()
+                        return@runOnUiThread
+                    }
+
+                    enhancedBitmap?.let { if (!it.isRecycled) it.recycle() }
+                    enhancedBitmap = completed
+                    isShowingEnhanced = true
+                    displayCurrentPhoto()
+
+                    isProcessing = false
+                    setControlsEnabled(true)
+                    statusText.text = "Free cloud restoration complete! GFPGAN face restoration + Real-ESRGAN background enhancement."
+                    Toast.makeText(this, "Cloud-enhanced photo is ready!", Toast.LENGTH_LONG).show()
+                }
+
+            } catch (e: Exception) {
+                resultBitmap?.let { if (!it.isRecycled) it.recycle() }
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    isProcessing = false
+                    setControlsEnabled(true)
+                    statusText.text = "Cloud enhancement failed: ${e.message ?: "Please try again."}"
+                    Toast.makeText(this, "Cloud enhancement failed", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                connection?.disconnect()
             }
         }
     }
