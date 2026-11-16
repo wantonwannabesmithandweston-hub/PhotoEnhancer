@@ -51,6 +51,8 @@ class MainActivity : Activity() {
     private lateinit var downloadFaceModelButton: Button
     private lateinit var faceRestoreToggleButton: Button
     private lateinit var instructionsInput: EditText
+    private lateinit var advancedSettingsLayout: LinearLayout
+    private lateinit var advancedSettingsButton: Button
 
     private var selectedStrength = "Balanced"
     private var selectedMode = "Natural Restore"
@@ -100,7 +102,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(20), dp(12), dp(20))
-            setBackgroundColor(Color.rgb(20, 20, 20))
+            setBackgroundColor(Color.rgb(16, 20, 27))
         }
 
         val title = TextView(this).apply {
@@ -112,7 +114,7 @@ class MainActivity : Activity() {
         layout.addView(title)
 
         val subtitle = TextView(this).apply {
-            text = "Free Offline AI Photo Editing"
+            text = "Private • Free • On-device AI editing"
             textSize = 14f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -120,7 +122,7 @@ class MainActivity : Activity() {
         layout.addView(subtitle)
 
         photoView = ZoomableImageView(this).apply {
-            setBackgroundColor(Color.rgb(35, 35, 35))
+            setBackgroundColor(Color.rgb(28, 35, 45))
             scaleType = ImageView.ScaleType.MATRIX
         }
 
@@ -148,7 +150,7 @@ class MainActivity : Activity() {
         }
 
         uploadButton = Button(this).apply {
-            text = "Upload Picture"
+            text = "＋ Choose a Photo"
         }
         layout.addView(uploadButton)
 
@@ -164,6 +166,25 @@ class MainActivity : Activity() {
             }
         }
 
+        advancedSettingsButton = Button(this).apply {
+            text = "⚙ Advanced Settings  +"
+            isAllCaps = false
+        }
+        layout.addView(advancedSettingsButton)
+
+        advancedSettingsLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(Color.rgb(30, 30, 30))
+        }
+        layout.addView(advancedSettingsLayout)
+
+        advancedSettingsButton.setOnClickListener {
+            val expanded = advancedSettingsLayout.visibility != android.view.View.VISIBLE
+            advancedSettingsLayout.visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
+            advancedSettingsButton.text = if (expanded) "⚙ Advanced Settings  −" else "⚙ Advanced Settings  +"
+        }
         val instructionTitle = TextView(this).apply {
             text = "Custom Editing Instructions"
             textSize = 20f
@@ -171,7 +192,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(18), 0, dp(8))
         }
-        layout.addView(instructionTitle)
+        advancedSettingsLayout.addView(instructionTitle)
 
         instructionsInput = EditText(this).apply {
             hint = "Example: Make the photo brighter, improve lighting, sharpen details naturally..."
@@ -185,7 +206,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(48, 48, 48))
         }
 
-        layout.addView(
+        advancedSettingsLayout.addView(
             instructionsInput,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -201,7 +222,7 @@ class MainActivity : Activity() {
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
         }
-        layout.addView(instructionHelp)
+        advancedSettingsLayout.addView(instructionHelp)
 
         val modeLabel = TextView(this).apply {
             text = "Editing Mode"
@@ -210,14 +231,14 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(16), 0, dp(4))
         }
-        layout.addView(modeLabel)
+        advancedSettingsLayout.addView(modeLabel)
 
         modeText = TextView(this).apply {
             textSize = 15f
             setTextColor(Color.GREEN)
             gravity = Gravity.CENTER
         }
-        layout.addView(modeText)
+        advancedSettingsLayout.addView(modeText)
 
         val modeDescriptions = mapOf(
             "Natural Restore" to "Cleaner photos, gentler sharpening, reduced noise",
@@ -231,7 +252,7 @@ class MainActivity : Activity() {
             }
 
             modeButtons[mode] = button
-            layout.addView(button)
+            advancedSettingsLayout.addView(button)
 
             button.setOnClickListener {
                 if (!isProcessing && !isSaving && !isModelTesting) {
@@ -248,14 +269,14 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(14), 0, dp(4))
         }
-        layout.addView(strengthLabel)
+        advancedSettingsLayout.addView(strengthLabel)
 
         strengthText = TextView(this).apply {
             textSize = 17f
             setTextColor(Color.GREEN)
             gravity = Gravity.CENTER
         }
-        layout.addView(strengthText)
+        advancedSettingsLayout.addView(strengthText)
 
         listOf("Low", "Balanced", "High", "Ultra").forEach { strength ->
             val button = Button(this).apply {
@@ -263,7 +284,7 @@ class MainActivity : Activity() {
             }
 
             strengthButtons[strength] = button
-            layout.addView(button)
+            advancedSettingsLayout.addView(button)
 
             button.setOnClickListener {
                 if (!isProcessing && !isSaving && !isModelTesting) {
@@ -274,7 +295,7 @@ class MainActivity : Activity() {
         }
 
         enhanceButton = Button(this).apply {
-            text = "Enhance Photo"
+            text = "✨ Enhance Photo"
         }
         layout.addView(enhanceButton)
 
@@ -329,7 +350,7 @@ class MainActivity : Activity() {
         }
 
         saveButton = Button(this).apply {
-            text = "Save Enhanced Photo to Gallery"
+            text = "↓ Save to Gallery"
             isEnabled = false
         }
         layout.addView(saveButton)
