@@ -1,3 +1,4 @@
+
 package com.privatephoto.enhancer
 
 import android.app.Activity
@@ -50,7 +51,7 @@ class MainActivity : Activity() {
     private lateinit var instructionsInput: EditText
 
     private var selectedStrength = "Balanced"
-    private var selectedMode = "Balanced"
+    private var selectedMode = "Natural Restore"
     private var selectedImage: Uri? = null
     private var enhancedBitmap: Bitmap? = null
     private var isShowingEnhanced = false
@@ -169,7 +170,7 @@ class MainActivity : Activity() {
         layout.addView(instructionTitle)
 
         instructionsInput = EditText(this).apply {
-            hint = "Example: Make the photo brighter, increase sharpness, add warmth, and make colors more vivid..."
+            hint = "Example: Make the photo brighter, improve lighting, sharpen details naturally..."
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
             textSize = 15f
@@ -495,33 +496,36 @@ class MainActivity : Activity() {
 
         val settings = EditSettings()
 
+        // Gentle brightness correction to prevent dark results.
+        settings.brightness = 0.05f
+
         when (strength) {
             "Low" -> {
-                settings.contrast = 1.03f
-                settings.saturation = 1.02f
-                settings.sharpen = 0.25f
+                settings.contrast = 1.02f
+                settings.saturation = 1.01f
+                settings.sharpen = 0.20f
             }
             "Balanced" -> {
-                settings.contrast = 1.06f
-                settings.saturation = 1.04f
-                settings.sharpen = 0.50f
+                settings.contrast = 1.04f
+                settings.saturation = 1.03f
+                settings.sharpen = 0.40f
             }
             "High" -> {
-                settings.contrast = 1.10f
-                settings.saturation = 1.07f
-                settings.sharpen = 0.75f
+                settings.contrast = 1.07f
+                settings.saturation = 1.05f
+                settings.sharpen = 0.65f
             }
             "Ultra" -> {
-                settings.contrast = 1.14f
-                settings.saturation = 1.10f
-                settings.sharpen = 0.95f
+                settings.contrast = 1.10f
+                settings.saturation = 1.07f
+                settings.sharpen = 0.85f
             }
         }
 
         when (mode) {
             "Natural Restore" -> {
-                settings.noiseReduction = 0.40f
-                settings.sharpen *= 0.65f
+                settings.noiseReduction = 0.30f
+                settings.sharpen *= 0.60f
                 settings.contrast *= 0.97f
                 settings.saturation *= 0.98f
             }
@@ -530,8 +534,8 @@ class MainActivity : Activity() {
             }
             "Maximum Detail" -> {
                 settings.noiseReduction = 0.04f
-                settings.sharpen *= 1.35f
-                settings.contrast *= 1.03f
+                settings.sharpen *= 1.25f
+                settings.contrast *= 1.02f
             }
         }
 
@@ -621,7 +625,6 @@ class MainActivity : Activity() {
                 (settings.noiseReduction + 0.20f).coerceAtMost(0.65f)
         }
 
-        // Keep custom settings within safe ranges.
         settings.brightness =
             settings.brightness.coerceIn(-0.30f, 0.30f)
         settings.contrast =
@@ -762,7 +765,9 @@ class MainActivity : Activity() {
         }
 
         return output
-    }    private fun createTileStarts(length: Int): List<Int> {
+    }
+
+    private fun createTileStarts(length: Int): List<Int> {
         if (length <= TILE_SIZE) return listOf(0)
 
         val starts = mutableListOf(0)
@@ -846,18 +851,15 @@ class MainActivity : Activity() {
             val totalTiles = xStarts.size * yStarts.size
             var tileNumber = 0
 
-            val contrast = when (strength) {
-                "Low" -> 1.00f
-                "High" -> 1.06f
-                "Ultra" -> 1.09f
-                else -> 1.03f
-            }
+            // Do not increase contrast before AI inference.
+            // This helps preserve natural brightness and skin tones.
+            val contrast = 1.00f
 
             val saturation = when (strength) {
                 "Low" -> 1.00f
-                "High" -> 1.04f
-                "Ultra" -> 1.06f
-                else -> 1.02f
+                "High" -> 1.02f
+                "Ultra" -> 1.03f
+                else -> 1.01f
             }
 
             for (yIndex in yStarts.indices) {
@@ -1169,7 +1171,9 @@ class MainActivity : Activity() {
                 }
             }
         }
-    }    private fun saveEnhancedPhoto() {
+    }
+
+    private fun saveEnhancedPhoto() {
         val bitmap = enhancedBitmap
 
         if (bitmap == null || bitmap.isRecycled) {
