@@ -455,10 +455,11 @@ class MainActivity : Activity() {
         var inputTensor: OnnxTensor? = null
 
         try {
-            session = environment.createSession(file.absolutePath, options)
-            val inputName = session.inputNames.firstOrNull()
+            val activeSession = environment.createSession(file.absolutePath, options)
+            session = activeSession
+            val inputName = activeSession.inputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no input")
-            val outputName = session.outputNames.firstOrNull()
+            val outputName = activeSession.outputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no output")
 
             inputTensor = OnnxTensor.createTensor(
@@ -467,7 +468,7 @@ class MainActivity : Activity() {
                 longArrayOf(1, 3, TILE_SIZE.toLong(), TILE_SIZE.toLong())
             )
 
-            session.run(mapOf(inputName to inputTensor)).use { results ->
+            activeSession.run(mapOf(inputName to inputTensor)).use { results ->
                 val output = results.get(outputName) as? OnnxTensor
                     ?: throw Exception("High-detail model output is not a tensor")
                 val values = output.floatBuffer
@@ -1019,13 +1020,14 @@ class MainActivity : Activity() {
         var destination: Bitmap? = null
 
         try {
-            session = environment.createSession(
+            val activeSession = environment.createSession(
                 photoQualityModelFile.absolutePath,
                 options
             )
-            val inputName = session.inputNames.firstOrNull()
+            session = activeSession
+            val inputName = activeSession.inputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no input")
-            val outputName = session.outputNames.firstOrNull()
+            val outputName = activeSession.outputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no output")
 
             val width = source.width
@@ -1088,7 +1090,7 @@ class MainActivity : Activity() {
                     )
 
                     val aiOutput = try {
-                        session.run(mapOf(inputName to inputTensor)).use { results ->
+                        activeSession.run(mapOf(inputName to inputTensor)).use { results ->
                             val output = results.get(outputName) as? OnnxTensor
                                 ?: throw Exception("High-detail model output is not a tensor")
                             val buffer = output.floatBuffer
