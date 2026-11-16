@@ -1645,7 +1645,8 @@ class MainActivity : Activity() {
 
                 val input = androidx.work.workDataOf(
                     CloudEnhancementWorker.KEY_INPUT_PATH to source.absolutePath,
-                    CloudEnhancementWorker.KEY_STRENGTH to selectedStrength
+                    CloudEnhancementWorker.KEY_STRENGTH to selectedStrength,
+                    CloudEnhancementWorker.KEY_MIME_TYPE to (contentResolver.getType(uri) ?: "image/jpeg")
                 )
                 val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
                     .setInputData(input)
