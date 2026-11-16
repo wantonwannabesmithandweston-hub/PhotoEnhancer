@@ -1715,9 +1715,13 @@ class MainActivity : Activity() {
             val info = infos?.firstOrNull() ?: return@Observer
             when (info.state) {
                 androidx.work.WorkInfo.State.ENQUEUED -> {
+                    isProcessing = true
+                    setControlsEnabled(false)
                     statusText.text = "Cloud enhancement queued. It will continue in the background..."
                 }
                 androidx.work.WorkInfo.State.RUNNING -> {
+                    isProcessing = true
+                    setControlsEnabled(false)
                     val startedAt = info.progress.getLong(CloudEnhancementWorker.KEY_STARTED_AT, 0L)
                     startCloudEta(startedAt)
                 }
