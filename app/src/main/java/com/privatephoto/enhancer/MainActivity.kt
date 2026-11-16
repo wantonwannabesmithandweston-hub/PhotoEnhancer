@@ -1631,56 +1631,41 @@ class MainActivity : Activity() {
         if (isProcessing || isSaving || isModelTesting) return
         isProcessing = true
         setControlsEnabled(false)
-        statusText.text = "Preparing background cloud restoration..."
+        statusText.text = "Queuing background cloud restoration..."
 
-        executor.execute {
-            try {
-                val source = File(filesDir, "cloud_input_${System.currentTimeMillis()}.img")
-                contentResolver.openInputStream(uri)?.use { input ->
-                    source.outputStream().use { output -> input.copyTo(output) }
-                } ?: throw Exception("Cannot read selected photo")
-                if (!source.isFile || source.length() == 0L || source.length() > MAX_CLOUD_UPLOAD_SIZE) {
-                    source.delete()
-                    throw Exception("Please choose a photo smaller than 20 MB.")
-                }
-
-                val input = androidx.work.workDataOf(
-                    CloudEnhancementWorker.KEY_INPUT_PATH to source.absolutePath,
-                    CloudEnhancementWorker.KEY_STRENGTH to selectedStrength,
-                    CloudEnhancementWorker.KEY_MIME_TYPE to (contentResolver.getType(uri) ?: "image/jpeg")
+        try {
+            // Pass the persisted picker URI directly to WorkManager. The Activity's
+            // executor is shut down in onDestroy(), so preparing the upload there
+            // could be interrupted as soon as the user leaves the screen.
+            val input = androidx.work.workDataOf(
+                CloudEnhancementWorker.KEY_INPUT_URI to uri.toString(),
+                CloudEnhancementWorker.KEY_STRENGTH to selectedStrength,
+                CloudEnhancementWorker.KEY_MIME_TYPE to (contentResolver.getType(uri) ?: "image/jpeg")
+            )
+            val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
+                .setInputData(input)
+                .setConstraints(
+                    androidx.work.Constraints.Builder()
+                        .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                        .build()
                 )
-                val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
-                    .setInputData(input)
-                    .setConstraints(
-                        androidx.work.Constraints.Builder()
-                            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
-                            .build()
-                    )
-                    .setBackoffCriteria(
-                        androidx.work.BackoffPolicy.EXPONENTIAL,
-                        30,
-                        java.util.concurrent.TimeUnit.SECONDS
-                    )
-                    .build()
-                androidx.work.WorkManager.getInstance(applicationContext)
-                    .enqueueUniqueWork(
-                        CloudEnhancementWorker.UNIQUE_WORK_NAME,
-                        androidx.work.ExistingWorkPolicy.REPLACE,
-                        request
-                    )
-
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    statusText.text = "Cloud enhancement is running in the background. You can leave the app."
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    isProcessing = false
-                    setControlsEnabled(true)
-                    statusText.text = "Could not start cloud enhancement: ${e.message}"
-                }
-            }
+                .setBackoffCriteria(
+                    androidx.work.BackoffPolicy.EXPONENTIAL,
+                    30,
+                    java.util.concurrent.TimeUnit.SECONDS
+                )
+                .build()
+            androidx.work.WorkManager.getInstance(applicationContext)
+                .enqueueUniqueWork(
+                    CloudEnhancementWorker.UNIQUE_WORK_NAME,
+                    androidx.work.ExistingWorkPolicy.REPLACE,
+                    request
+                )
+            statusText.text = "Cloud enhancement queued. It will continue if you leave the app."
+        } catch (e: Exception) {
+            isProcessing = false
+            setControlsEnabled(true)
+            statusText.text = "Could not start cloud enhancement: ${e.message}"
         }
     }
 
