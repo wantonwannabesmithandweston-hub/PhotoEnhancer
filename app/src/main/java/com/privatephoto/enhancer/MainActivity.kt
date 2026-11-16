@@ -377,7 +377,7 @@ class MainActivity : Activity() {
         updateStrengthButtons()
         updateModeButtons()
         updatePhotoModelButton()
-        statusText.text = "Upload a photo to get started"
+        statusText.text = "Upload a photo to get started"\n        observeCloudEnhancement()
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
@@ -1628,98 +1628,102 @@ class MainActivity : Activity() {
 
     private fun enhancePhotoWithCloud(uri: Uri) {
         if (isProcessing || isSaving || isModelTesting) return
-
         isProcessing = true
-        val strength = selectedStrength
         setControlsEnabled(false)
-        statusText.text = "Connecting to free cloud restoration... This can take a minute."
+        statusText.text = "Preparing background cloud restoration..."
 
         executor.execute {
-            var connection: HttpURLConnection? = null
-            var resultBitmap: Bitmap? = null
-
             try {
-                val bytes = readPhotoBytes(uri)
-                if (bytes.isEmpty() || bytes.size > MAX_CLOUD_UPLOAD_SIZE) {
+                val source = File(cacheDir, "cloud_input_${System.currentTimeMillis()}.img")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    source.outputStream().use { output -> input.copyTo(output) }
+                } ?: throw Exception("Cannot read selected photo")
+                if (!source.isFile || source.length() == 0L || source.length() > MAX_CLOUD_UPLOAD_SIZE) {
+                    source.delete()
                     throw Exception("Please choose a photo smaller than 20 MB.")
                 }
 
-                val boundary = "----PrivatePhotoEnhancer" + System.currentTimeMillis()
-                val mimeType = contentResolver.getType(uri) ?: "image/jpeg"
-                val fileName = if (mimeType == "image/png") "photo.png" else "photo.jpg"
-
-                val activeConnection = (URL("$SERVER/enhance").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 30_000
-                    readTimeout = 300_000
-                    doOutput = true
-                    setRequestProperty("Accept", "image/png")
-                    setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                }
-                connection = activeConnection
-
-                activeConnection.outputStream.use { output ->
-                    fun writeText(value: String) {
-                        output.write(value.toByteArray(Charsets.UTF_8))
-                    }
-
-                    writeText("--$boundary\r\n")
-                    writeText("Content-Disposition: form-data; name=\"strength\"\r\n\r\n")
-                    writeText("$strength\r\n")
-
-                    writeText("--$boundary\r\n")
-                    writeText("Content-Disposition: form-data; name=\"image\"; filename=\"$fileName\"\r\n")
-                    writeText("Content-Type: $mimeType\r\n\r\n")
-                    output.write(bytes)
-                    writeText("\r\n--$boundary--\r\n")
-                    output.flush()
-                }
-
-                val responseCode = activeConnection.responseCode
-                if (responseCode !in 200..299) {
-                    val errorText = try {
-                        activeConnection.errorStream?.bufferedReader()?.use { it.readText() }
-                    } catch (_: Exception) { null }
-                    throw Exception("Cloud service error $responseCode. " + (errorText ?: "Please try again later."))
-                }
-
-                val responseBytes = activeConnection.inputStream.use { it.readBytes() }
-                resultBitmap = BitmapFactory.decodeByteArray(responseBytes, 0, responseBytes.size)
-                    ?: throw Exception("The cloud service returned an invalid image.")
-
-                val completed = resultBitmap ?: throw Exception("The cloud service returned an invalid image.")
-                resultBitmap = null
+                val input = androidx.work.workDataOf(
+                    CloudEnhancementWorker.KEY_INPUT_PATH to source.absolutePath,
+                    CloudEnhancementWorker.KEY_STRENGTH to selectedStrength
+                )
+                val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
+                    .setInputData(input)
+                    .setBackoffCriteria(
+                        androidx.work.BackoffPolicy.EXPONENTIAL,
+                        30,
+                        java.util.concurrent.TimeUnit.SECONDS
+                    )
+                    .build()
+                androidx.work.WorkManager.getInstance(applicationContext)
+                    .enqueueUniqueWork(
+                        CloudEnhancementWorker.UNIQUE_WORK_NAME,
+                        androidx.work.ExistingWorkPolicy.REPLACE,
+                        request
+                    )
 
                 runOnUiThread {
-                    if (isFinishing || isDestroyed) {
-                        completed.recycle()
-                        return@runOnUiThread
-                    }
-
-                    enhancedBitmap?.let { if (!it.isRecycled) it.recycle() }
-                    enhancedBitmap = completed
-                    isShowingEnhanced = true
-                    displayCurrentPhoto()
-
-                    isProcessing = false
-                    setControlsEnabled(true)
-                    statusText.text = "Free cloud restoration complete! GFPGAN face restoration + Real-ESRGAN background enhancement."
-                    Toast.makeText(this, "Cloud-enhanced photo is ready!", Toast.LENGTH_LONG).show()
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    statusText.text = "Cloud enhancement is running in the background. You can leave the app."
+                    observeCloudEnhancement()
                 }
-
             } catch (e: Exception) {
-                resultBitmap?.let { if (!it.isRecycled) it.recycle() }
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     isProcessing = false
                     setControlsEnabled(true)
-                    statusText.text = "Cloud enhancement failed: ${e.message ?: "Please try again."}"
-                    Toast.makeText(this, "Cloud enhancement failed", Toast.LENGTH_LONG).show()
+                    statusText.text = "Could not start cloud enhancement: ${e.message}"
                 }
-            } finally {
-                connection?.disconnect()
             }
         }
+    }
+
+    private fun observeCloudEnhancement() {
+        androidx.work.WorkManager.getInstance(applicationContext)
+            .getWorkInfosForUniqueWorkLiveData(CloudEnhancementWorker.UNIQUE_WORK_NAME)
+            .observe(this) { infos ->
+                val info = infos?.firstOrNull() ?: return@observe
+                when (info.state) {
+                    androidx.work.WorkInfo.State.ENQUEUED ->
+                        statusText.text = "Cloud enhancement queued. It will continue in the background..."
+                    androidx.work.WorkInfo.State.RUNNING ->
+                        statusText.text = "Enhancing photo in the background... You can safely leave the app."
+                    androidx.work.WorkInfo.State.SUCCEEDED -> {
+                        val resultUri = info.outputData.getString(CloudEnhancementWorker.KEY_OUTPUT_URI)
+                        if (resultUri != null) {
+                            try {
+                                val bitmap = contentResolver.openInputStream(Uri.parse(resultUri))?.use {
+                                    BitmapFactory.decodeStream(it)
+                                } ?: throw Exception("Could not load the enhanced image")
+                                enhancedBitmap?.let { if (!it.isRecycled) it.recycle() }
+                                enhancedBitmap = bitmap
+                                isShowingEnhanced = true
+                                displayCurrentPhoto()
+                                statusText.text = "Cloud restoration complete! Photo automatically saved to your gallery."
+                            } catch (e: Exception) {
+                                statusText.text = "Enhancement finished, but preview failed: ${e.message}"
+                            }
+                        } else {
+                            statusText.text = "Cloud restoration finished. Check your gallery."
+                        }
+                        isProcessing = false
+                        setControlsEnabled(true)
+                    }
+                    androidx.work.WorkInfo.State.FAILED -> {
+                        val message = info.outputData.getString(CloudEnhancementWorker.KEY_ERROR)
+                            ?: "Cloud restoration failed. Please try again."
+                        statusText.text = message
+                        isProcessing = false
+                        setControlsEnabled(true)
+                    }
+                    androidx.work.WorkInfo.State.CANCELLED -> {
+                        statusText.text = "Cloud enhancement was cancelled."
+                        isProcessing = false
+                        setControlsEnabled(true)
+                    }
+                    else -> Unit
+                }
+            }
     }
 
     private fun saveEnhancedPhoto() {
