@@ -295,7 +295,7 @@ class MainActivity : Activity() {
 
         downloadFaceModelButton = Button(this).apply {
             text = if (faceRestoreModelFile().exists()) {
-                "Face Restore Model Ready"
+                "Face Model Downloaded"
             } else {
                 "Download Face Restore Model (431 MB)"
             }
@@ -382,7 +382,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun setControlsEnabled(enabled: Boolean) {        enhanceButton.isEnabled = enabled
+    private fun setControlsEnabled(enabled: Boolean) {
+        enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
         downloadFaceModelButton.isEnabled = enabled && !faceRestoreModelFile().exists()
