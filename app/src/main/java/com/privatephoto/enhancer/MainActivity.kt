@@ -34,6 +34,14 @@ import com.google.android.gms.litert.LiteRt
 import com.google.android.gms.tasks.Tasks
 
 import java.util.concurrent.Executors
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.nio.FloatBuffer
+import java.security.MessageDigest
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import kotlin.math.roundToInt
 import kotlin.math.abs
 
@@ -48,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
+    private lateinit var downloadModelButton: Button
     private lateinit var instructionsInput: EditText
 
     private var selectedStrength = "Balanced"
@@ -66,10 +75,20 @@ class MainActivity : Activity() {
     private var isProcessing = false
     private var isSaving = false
     private var isModelTesting = false
+    private var isDownloadingPhotoModel = false
 
     private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
+    private val photoQualityModelFile by lazy {
+        File(filesDir, "realesrgan_x4plus_w16.onnx")
+    }
 
     companion object {
+        private const val PHOTO_MODEL_URL =
+            "https://huggingface.co/openpixels-app/browser-models/resolve/e618190d21568175ea4d6d73a85dc599c4e36139/realesrgan_x4plus_w16.onnx"
+        private const val PHOTO_MODEL_BYTES = 33_724_311L
+        private const val PHOTO_MODEL_SHA256 =
+            "29fbb9bc95708f9f63966804a389be77fe060dbdda882402bd1592a10908d364"
+
         private const val TILE_SIZE = 128
         private const val OUTPUT_TILE_SIZE = 512
         private const val CHANNELS = 3
@@ -291,6 +310,14 @@ class MainActivity : Activity() {
             testAiModel()
         }
 
+        downloadModelButton = Button(this).apply {
+            text = "Download High-Detail Model (34 MB)"
+        }
+        layout.addView(downloadModelButton)
+        downloadModelButton.setOnClickListener {
+            downloadPhotoQualityModel()
+        }
+
         saveButton = Button(this).apply {
             text = "Save Enhanced Photo to Gallery"
             isEnabled = false
@@ -322,6 +349,7 @@ class MainActivity : Activity() {
 
         updateStrengthButtons()
         updateModeButtons()
+        updatePhotoModelButton()
         statusText.text = "Upload a photo to get started"
     }
 
@@ -329,6 +357,9 @@ class MainActivity : Activity() {
         enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
+        downloadModelButton.isEnabled =
+            enabled && !hasPhotoQualityModel() && !isDownloadingPhotoModel
+        updatePhotoModelButton()
         instructionsInput.isEnabled = enabled
 
         saveButton.isEnabled =
@@ -399,6 +430,180 @@ class MainActivity : Activity() {
             ?: throw Exception("Cannot open selected photo")
 
         return stream.use { it.readBytes() }
+    }
+
+    private fun hasPhotoQualityModel(): Boolean =
+        photoQualityModelFile.isFile &&
+            photoQualityModelFile.length() == PHOTO_MODEL_BYTES
+
+    private fun updatePhotoModelButton() {
+        if (!::downloadModelButton.isInitialized) return
+        downloadModelButton.text = if (hasPhotoQualityModel()) {
+            "High-Detail Model Installed"
+        } else {
+            "Download High-Detail Model (34 MB)"
+        }
+        downloadModelButton.isEnabled =
+            !hasPhotoQualityModel() && !isDownloadingPhotoModel &&
+                !isProcessing && !isSaving && !isModelTesting
+    }
+
+    private fun validatePhotoModel(file: File) {
+        val environment = OrtEnvironment.getEnvironment()
+        val options = OrtSession.SessionOptions()
+        var session: OrtSession? = null
+        var inputTensor: OnnxTensor? = null
+
+        try {
+            session = environment.createSession(file.absolutePath, options)
+            val inputName = session.inputNames.firstOrNull()
+                ?: throw Exception("High-detail model has no input")
+            val outputName = session.outputNames.firstOrNull()
+                ?: throw Exception("High-detail model has no output")
+
+            inputTensor = OnnxTensor.createTensor(
+                environment,
+                FloatBuffer.wrap(FloatArray(INPUT_ELEMENTS) { 0.5f }),
+                longArrayOf(1, 3, TILE_SIZE.toLong(), TILE_SIZE.toLong())
+            )
+
+            session.run(mapOf(inputName to inputTensor)).use { results ->
+                val output = results.get(outputName) as? OnnxTensor
+                    ?: throw Exception("High-detail model output is not a tensor")
+                val values = output.floatBuffer
+                if (values.remaining() != OUTPUT_ELEMENTS) {
+                    throw Exception("High-detail model output shape is not 4×")
+                }
+                val sample = FloatArray(OUTPUT_ELEMENTS)
+                values.get(sample)
+                if (sample.any { it.isNaN() || it.isInfinite() }) {
+                    throw Exception("High-detail model returned invalid values")
+                }
+            }
+        } finally {
+            try { inputTensor?.close() } catch (_: Exception) {}
+            try { session?.close() } catch (_: Exception) {}
+            try { options.close() } catch (_: Exception) {}
+        }
+    }
+
+    private fun downloadPhotoQualityModel() {
+        if (
+            isDownloadingPhotoModel || isProcessing ||
+            isSaving || isModelTesting || hasPhotoQualityModel()
+        ) return
+
+        isDownloadingPhotoModel = true
+        setControlsEnabled(false)
+        statusText.text =
+            "Downloading the optional 34 MB high-detail model. Wi-Fi recommended..."
+
+        executor.execute {
+            val temporaryFile =
+                File(filesDir, "realesrgan_x4plus_w16.onnx.part")
+            var connection: HttpURLConnection? = null
+            var resultMessage: String
+
+            try {
+                val activeConnection =
+                    (URL(PHOTO_MODEL_URL).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 30_000
+                        readTimeout = 120_000
+                        requestMethod = "GET"
+                        setRequestProperty(
+                            "User-Agent",
+                            "PrivatePhotoEnhancer/1.0"
+                        )
+                    }
+                connection = activeConnection
+                activeConnection.connect()
+
+                if (activeConnection.responseCode !in 200..299) {
+                    throw Exception(
+                        "Model download failed (HTTP ${activeConnection.responseCode})"
+                    )
+                }
+
+                var downloaded = 0L
+                var lastProgressBucket = -1L
+
+                activeConnection.inputStream.use { input ->
+                    temporaryFile.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            downloaded += count
+                            if (downloaded > PHOTO_MODEL_BYTES) {
+                                throw Exception("Downloaded model was larger than expected")
+                            }
+                            output.write(buffer, 0, count)
+
+                            val bucket = downloaded / (3L * 1024L * 1024L)
+                            if (bucket != lastProgressBucket) {
+                                lastProgressBucket = bucket
+                                val percent =
+                                    (downloaded * 100L / PHOTO_MODEL_BYTES).toInt()
+                                runOnUiThread {
+                                    if (!isFinishing && !isDestroyed) {
+                                        statusText.text =
+                                            "Downloading high-detail model: $percent%"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (temporaryFile.length() != PHOTO_MODEL_BYTES) {
+                    throw Exception("Downloaded model size did not match the verified file")
+                }
+
+                val digest = MessageDigest.getInstance("SHA-256")
+                temporaryFile.inputStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                }
+
+                val actualHash = digest.digest().joinToString("") {
+                    "%02x".format(it.toInt() and 0xff)
+                }
+                if (!actualHash.equals(PHOTO_MODEL_SHA256, ignoreCase = true)) {
+                    throw Exception("Model checksum verification failed")
+                }
+
+                validatePhotoModel(temporaryFile)
+
+                if (photoQualityModelFile.exists()) {
+                    photoQualityModelFile.delete()
+                }
+                if (!temporaryFile.renameTo(photoQualityModelFile)) {
+                    throw Exception("Could not install the downloaded model")
+                }
+
+                resultMessage =
+                    "High-detail model installed and verified. New enhancements will use Real-ESRGAN x4plus."
+
+            } catch (e: Exception) {
+                temporaryFile.delete()
+                resultMessage =
+                    "Model download failed: ${e.message ?: "unknown error"}. Your existing model is still available."
+            } finally {
+                connection?.disconnect()
+            }
+
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                isDownloadingPhotoModel = false
+                setControlsEnabled(true)
+                updatePhotoModelButton()
+                statusText.text = resultMessage
+            }
+        }
     }
 
     private fun testAiModel() {
@@ -790,6 +995,187 @@ class MainActivity : Activity() {
         return starts
     }
 
+    private fun runActiveRealEsrgan(
+        source: Bitmap,
+        strength: String,
+        progress: (Int, Int) -> Unit
+    ): Bitmap {
+        return if (hasPhotoQualityModel()) {
+            runRealEsrganOnnx(source, strength, progress)
+        } else {
+            runRealEsrgan(source, strength, progress)
+        }
+    }
+
+    private fun runRealEsrganOnnx(
+        source: Bitmap,
+        strength: String,
+        progress: (Int, Int) -> Unit
+    ): Bitmap {
+        val environment = OrtEnvironment.getEnvironment()
+        val options = OrtSession.SessionOptions()
+        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        var session: OrtSession? = null
+        var destination: Bitmap? = null
+
+        try {
+            session = environment.createSession(
+                photoQualityModelFile.absolutePath,
+                options
+            )
+            val inputName = session.inputNames.firstOrNull()
+                ?: throw Exception("High-detail model has no input")
+            val outputName = session.outputNames.firstOrNull()
+                ?: throw Exception("High-detail model has no output")
+
+            val width = source.width
+            val height = source.height
+            val outputBitmap = Bitmap.createBitmap(
+                width * 4,
+                height * 4,
+                Bitmap.Config.ARGB_8888
+            )
+            destination = outputBitmap
+
+            val sourcePixels = IntArray(width * height)
+            source.getPixels(sourcePixels, 0, width, 0, 0, width, height)
+
+            val planeSize = TILE_SIZE * TILE_SIZE
+            val inputData = FloatArray(INPUT_ELEMENTS)
+            val xStarts = createTileStarts(width)
+            val yStarts = createTileStarts(height)
+            val totalTiles = xStarts.size * yStarts.size
+            var tileNumber = 0
+
+            val saturation = when (strength) {
+                "Low" -> 1.00f
+                "High" -> 1.02f
+                "Ultra" -> 1.03f
+                else -> 1.01f
+            }
+
+            for (yIndex in yStarts.indices) {
+                val tileY = yStarts[yIndex]
+
+                for (xIndex in xStarts.indices) {
+                    val tileX = xStarts[xIndex]
+
+                    for (y in 0 until TILE_SIZE) {
+                        for (x in 0 until TILE_SIZE) {
+                            val sourceX = (tileX + x).coerceAtMost(width - 1)
+                            val sourceY = (tileY + y).coerceAtMost(height - 1)
+                            val pixel = sourcePixels[sourceY * width + sourceX]
+
+                            val r0 = Color.red(pixel) / 255f
+                            val g0 = Color.green(pixel) / 255f
+                            val b0 = Color.blue(pixel) / 255f
+                            val gray = 0.299f * r0 + 0.587f * g0 + 0.114f * b0
+
+                            val index = y * TILE_SIZE + x
+                            inputData[index] = (gray + (r0 - gray) * saturation)
+                                .coerceIn(0f, 1f)
+                            inputData[planeSize + index] =
+                                (gray + (g0 - gray) * saturation).coerceIn(0f, 1f)
+                            inputData[2 * planeSize + index] =
+                                (gray + (b0 - gray) * saturation).coerceIn(0f, 1f)
+                        }
+                    }
+
+                    val inputTensor = OnnxTensor.createTensor(
+                        environment,
+                        FloatBuffer.wrap(inputData),
+                        longArrayOf(1, 3, TILE_SIZE.toLong(), TILE_SIZE.toLong())
+                    )
+
+                    val aiOutput = try {
+                        session.run(mapOf(inputName to inputTensor)).use { results ->
+                            val output = results.get(outputName) as? OnnxTensor
+                                ?: throw Exception("High-detail model output is not a tensor")
+                            val buffer = output.floatBuffer
+                            if (buffer.remaining() != OUTPUT_ELEMENTS) {
+                                throw Exception("Unexpected high-detail model output size")
+                            }
+                            FloatArray(OUTPUT_ELEMENTS).also { buffer.get(it) }
+                        }
+                    } finally {
+                        inputTensor.close()
+                    }
+
+                    if (aiOutput.any { it.isNaN() || it.isInfinite() }) {
+                        throw Exception("High-detail model returned invalid values")
+                    }
+
+                    val tilePixels = IntArray(OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE)
+                    val outputPlane = OUTPUT_TILE_SIZE * OUTPUT_TILE_SIZE
+
+                    for (y in 0 until OUTPUT_TILE_SIZE) {
+                        for (x in 0 until OUTPUT_TILE_SIZE) {
+                            val index = y * OUTPUT_TILE_SIZE + x
+                            val r = (aiOutput[index] * 255f)
+                                .roundToInt().coerceIn(0, 255)
+                            val g = (aiOutput[outputPlane + index] * 255f)
+                                .roundToInt().coerceIn(0, 255)
+                            val b = (aiOutput[2 * outputPlane + index] * 255f)
+                                .roundToInt().coerceIn(0, 255)
+                            tilePixels[index] = Color.rgb(r, g, b)
+                        }
+                    }
+
+                    val cropLeft = if (xIndex == 0) 0 else (
+                        (xStarts[xIndex - 1] + TILE_SIZE - tileX) / 2
+                    ).coerceIn(0, TILE_SIZE)
+
+                    val cropTop = if (yIndex == 0) 0 else (
+                        (yStarts[yIndex - 1] + TILE_SIZE - tileY) / 2
+                    ).coerceIn(0, TILE_SIZE)
+
+                    val cropRight = if (xIndex == xStarts.lastIndex) {
+                        minOf(TILE_SIZE, width - tileX)
+                    } else {
+                        ((tileX + TILE_SIZE + xStarts[xIndex + 1]) / 2 - tileX)
+                            .coerceIn(cropLeft, TILE_SIZE)
+                    }
+
+                    val cropBottom = if (yIndex == yStarts.lastIndex) {
+                        minOf(TILE_SIZE, height - tileY)
+                    } else {
+                        ((tileY + TILE_SIZE + yStarts[yIndex + 1]) / 2 - tileY)
+                            .coerceIn(cropTop, TILE_SIZE)
+                    }
+
+                    val copyWidth = (cropRight - cropLeft) * 4
+                    val copyHeight = (cropBottom - cropTop) * 4
+
+                    if (copyWidth > 0 && copyHeight > 0) {
+                        val outputOffset =
+                            cropTop * 4 * OUTPUT_TILE_SIZE + cropLeft * 4
+                        outputBitmap.setPixels(
+                            tilePixels,
+                            outputOffset,
+                            OUTPUT_TILE_SIZE,
+                            (tileX + cropLeft) * 4,
+                            (tileY + cropTop) * 4,
+                            copyWidth,
+                            copyHeight
+                        )
+                    }
+
+                    tileNumber++
+                    progress(tileNumber, totalTiles)
+                }
+            }
+
+            return outputBitmap
+
+        } catch (e: Exception) {
+            destination?.let { if (!it.isRecycled) it.recycle() }
+            throw e
+        } finally {
+            try { session?.close() } catch (_: Exception) {}
+            try { options.close() } catch (_: Exception) {}
+        }
+    }
+
     private fun runRealEsrgan(
         source: Bitmap,
         strength: String,
@@ -1082,7 +1468,7 @@ class MainActivity : Activity() {
                         }
                     }
 
-                    aiBitmap = runRealEsrgan(source, strength) {
+                    aiBitmap = runActiveRealEsrgan(source, strength) {
                         completed, total ->
                         runOnUiThread {
                             if (!isFinishing && !isDestroyed) {
