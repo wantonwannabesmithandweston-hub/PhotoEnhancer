@@ -1679,6 +1679,10 @@ class MainActivity : Activity() {
             )
             val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
                 .setInputData(input)
+                // Ask Android to start this user-initiated task promptly. If the
+                // expedited quota is exhausted, WorkManager safely falls back to
+                // a regular job; the worker then promotes itself to a foreground service.
+                .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 // Do not gate this job on WorkManager's network validator.
                 // Some Samsung/Android network states can leave CONNECTED work ENQUEUED
                 // even while Wi-Fi works. The worker handles network errors and retries.
