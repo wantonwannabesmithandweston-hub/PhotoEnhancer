@@ -471,7 +471,7 @@ class MainActivity : Activity() {
             inputTensor = activeInput
 
             activeSession.run(mapOf(inputName to activeInput)).use { results ->
-                val output = results.get(outputName) as? OnnxTensor
+                val output = results.get(outputName).orElse(null) as? OnnxTensor
                     ?: throw Exception("High-detail model output is not a tensor")
                 val values = output.floatBuffer
                 if (values.remaining() != OUTPUT_ELEMENTS) {
@@ -1093,7 +1093,7 @@ class MainActivity : Activity() {
 
                     val aiOutput = try {
                         activeSession.run(mapOf(inputName to inputTensor)).use { results ->
-                            val output = results.get(outputName) as? OnnxTensor
+                            val output = results.get(outputName).orElse(null) as? OnnxTensor
                                 ?: throw Exception("High-detail model output is not a tensor")
                             val buffer = output.floatBuffer
                             if (buffer.remaining() != OUTPUT_ELEMENTS) {
