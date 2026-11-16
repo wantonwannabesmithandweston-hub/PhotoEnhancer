@@ -443,6 +443,11 @@ class MainActivity : Activity() {
         } else {
             "Download High-Detail Model (34 MB)"
         }
+        testAiButton.text = if (hasPhotoQualityModel()) {
+            "Test High-Detail Model"
+        } else {
+            "Test AI Model"
+        }
         downloadModelButton.isEnabled =
             !hasPhotoQualityModel() && !isDownloadingPhotoModel &&
                 !isProcessing && !isSaving && !isModelTesting
@@ -611,6 +616,36 @@ class MainActivity : Activity() {
 
     private fun testAiModel() {
         if (isModelTesting || isProcessing || isSaving) return
+
+        if (hasPhotoQualityModel()) {
+            isModelTesting = true
+            setControlsEnabled(false)
+            statusText.text = "Testing high-detail Real-ESRGAN x4plus model..."
+
+            executor.execute {
+                var resultMessage: String
+                try {
+                    validatePhotoModel(photoQualityModelFile)
+                    resultMessage =
+                        "HIGH-DETAIL MODEL TEST PASSED!\n" +
+                        "Real-ESRGAN x4plus ONNX inference completed successfully.\n" +
+                        "Input: 128 × 128 RGB\n" +
+                        "Output: 512 × 512 RGB\n" +
+                        "4× high-detail upscaling is ready."
+                } catch (e: Exception) {
+                    resultMessage =
+                        "High-detail model test failed:\n${e.message}"
+                }
+
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    isModelTesting = false
+                    setControlsEnabled(true)
+                    statusText.text = resultMessage
+                }
+            }
+            return
+        }
 
         isModelTesting = true
         setControlsEnabled(false)
