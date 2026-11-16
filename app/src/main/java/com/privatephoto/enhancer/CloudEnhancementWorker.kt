@@ -1,16 +1,11 @@
 package com.privatephoto.enhancer
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.ContentValues
-import android.content.Context
 import android.os.Build
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.work.CoroutineWorker
-import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.Data
 import java.io.File
@@ -33,8 +28,6 @@ class CloudEnhancementWorker(
         const val KEY_OUTPUT_URI = "output_uri"
         const val KEY_ERROR = "error"
         const val KEY_STARTED_AT = "started_at_ms"
-        private const val CHANNEL_ID = "photo_enhancement"
-        private const val NOTIFICATION_ID = 4107
         private const val SERVER = "https://photoenhancer.onrender.com"
         private const val MAX_UPLOAD = 20 * 1024 * 1024
     }
@@ -47,7 +40,6 @@ class CloudEnhancementWorker(
         }
 
         try {
-            setForeground(createForegroundInfo("Preparing photo..."))
             val bytes = if (sourceUri != null) {
                 applicationContext.contentResolver.openInputStream(sourceUri)?.use { it.readBytes() }
                     ?: throw IllegalStateException("Android could not reopen the selected photo.")
@@ -65,7 +57,9 @@ class CloudEnhancementWorker(
             val connection = (URL("$SERVER/enhance").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 45_000
-                readTimeout = 600_000
+                // WorkManager's ordinary Worker has a 10-minute execution limit.
+                // Leave headroom for saving the returned image.
+                readTimeout = 480_000
                 doOutput = true
                 setRequestProperty("Accept", "image/png")
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
@@ -106,7 +100,6 @@ class CloudEnhancementWorker(
             }
 
             if (responseBytes.isEmpty()) throw IllegalStateException("Cloud returned an empty image.")
-            setForeground(createForegroundInfo("Saving enhanced photo..."))
             val savedUri = saveImage(responseBytes)
             source?.delete()
             Result.success(Data.Builder().putString(KEY_OUTPUT_URI, savedUri.toString()).build())
@@ -147,27 +140,4 @@ class CloudEnhancementWorker(
     private fun errorData(message: String) =
         Data.Builder().putString(KEY_ERROR, message).build()
 
-    private fun createForegroundInfo(message: String): ForegroundInfo {
-        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Photo enhancement", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-        val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(applicationContext, CHANNEL_ID)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(applicationContext)
-        }.setContentTitle("Private Photo Enhancer")
-            .setContentText(message)
-            .setSmallIcon(android.R.drawable.ic_menu_gallery)
-            .setOngoing(true)
-            .build()
-        return if (Build.VERSION.SDK_INT >= 29) {
-            ForegroundInfo(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            ForegroundInfo(NOTIFICATION_ID, notification)
-        }
-    }
 }
