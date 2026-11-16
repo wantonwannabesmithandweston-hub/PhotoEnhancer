@@ -1679,11 +1679,9 @@ class MainActivity : Activity() {
             )
             val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
                 .setInputData(input)
-                .setConstraints(
-                    androidx.work.Constraints.Builder()
-                        .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
-                        .build()
-                )
+                // Do not gate this job on WorkManager's network validator.
+                // Some Samsung/Android network states can leave CONNECTED work ENQUEUED
+                // even while Wi-Fi works. The worker handles network errors and retries.
                 .setBackoffCriteria(
                     androidx.work.BackoffPolicy.EXPONENTIAL,
                     30,
