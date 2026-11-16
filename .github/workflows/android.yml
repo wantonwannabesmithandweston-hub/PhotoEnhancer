@@ -3,7 +3,7 @@ name: Android CI
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "feature/gfpgan-face-restoration"]
   pull_request:
     branches: ["main"]
 
