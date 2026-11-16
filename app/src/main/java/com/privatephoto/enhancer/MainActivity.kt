@@ -1016,7 +1016,6 @@ class MainActivity : Activity() {
     ): Bitmap {
         val environment = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions()
-        options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         var session: OrtSession? = null
         var destination: Bitmap? = null
 
