@@ -34,10 +34,6 @@ import com.google.android.gms.litert.LiteRt
 import com.google.android.gms.tasks.Tasks
 
 import java.util.concurrent.Executors
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.security.MessageDigest
 import kotlin.math.roundToInt
 import kotlin.math.abs
 
@@ -52,7 +48,6 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
-    private lateinit var downloadModelButton: Button
     private lateinit var instructionsInput: EditText
 
     private var selectedStrength = "Balanced"
@@ -71,20 +66,10 @@ class MainActivity : Activity() {
     private var isProcessing = false
     private var isSaving = false
     private var isModelTesting = false
-    private var isDownloadingModel = false
 
     private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
-    private val photoQualityModelFile by lazy {
-        File(filesDir, "real_esrgan_x4plus_f32.tflite")
-    }
 
     companion object {
-        private const val PHOTO_MODEL_URL =
-            "https://huggingface.co/Mogfbkx/pixellift-models/resolve/45e7607/models/real_esrgan_x4plus_f32.tflite"
-        private const val PHOTO_MODEL_BYTES = 67_024_900L
-        private const val PHOTO_MODEL_SHA256 =
-            "026fcdd456423335fee6a7d7a624722e286e7d98adce2d651491819eb41bad87"
-
         private const val TILE_SIZE = 128
         private const val OUTPUT_TILE_SIZE = 512
         private const val CHANNELS = 3
@@ -306,14 +291,6 @@ class MainActivity : Activity() {
             testAiModel()
         }
 
-        downloadModelButton = Button(this).apply {
-            text = "Download Stronger Photo Model (67 MB)"
-        }
-        layout.addView(downloadModelButton)
-        downloadModelButton.setOnClickListener {
-            downloadPhotoQualityModel()
-        }
-
         saveButton = Button(this).apply {
             text = "Save Enhanced Photo to Gallery"
             isEnabled = false
@@ -345,7 +322,6 @@ class MainActivity : Activity() {
 
         updateStrengthButtons()
         updateModeButtons()
-        updatePhotoModelButton()
         statusText.text = "Upload a photo to get started"
     }
 
@@ -353,9 +329,6 @@ class MainActivity : Activity() {
         enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
-        downloadModelButton.isEnabled =
-            enabled && !hasPhotoQualityModel() && !isDownloadingModel
-        updatePhotoModelButton()
         instructionsInput.isEnabled = enabled
 
         saveButton.isEnabled =
@@ -428,168 +401,6 @@ class MainActivity : Activity() {
         return stream.use { it.readBytes() }
     }
 
-    private fun hasPhotoQualityModel(): Boolean =
-        photoQualityModelFile.isFile &&
-            photoQualityModelFile.length() == PHOTO_MODEL_BYTES
-
-    private fun updatePhotoModelButton() {
-        if (!::downloadModelButton.isInitialized) return
-        downloadModelButton.text = if (hasPhotoQualityModel()) {
-            "Stronger Photo Model Installed"
-        } else {
-            "Download Stronger Photo Model (67 MB)"
-        }
-        downloadModelButton.isEnabled =
-            !hasPhotoQualityModel() && !isDownloadingModel &&
-                !isProcessing && !isSaving && !isModelTesting
-    }
-
-    private fun createActiveModel(
-        environment: LiteRtEnvironment
-    ): CompiledModel {
-        return if (hasPhotoQualityModel()) {
-            CompiledModel.create(
-                photoQualityModelFile.absolutePath,
-                CompiledModel.Options(Accelerator.CPU),
-                environment
-            )
-        } else {
-            CompiledModel.create(
-                assets,
-                modelFile,
-                CompiledModel.Options(Accelerator.CPU),
-                environment
-            )
-        }
-    }
-
-    private fun downloadPhotoQualityModel() {
-        if (
-            isDownloadingModel || isProcessing ||
-            isSaving || isModelTesting || hasPhotoQualityModel()
-        ) return
-
-        isDownloadingModel = true
-        setControlsEnabled(false)
-        statusText.text =
-            "Downloading the stronger 67 MB photo model. Wi-Fi recommended..."
-
-        executor.execute {
-            val temporaryFile =
-                File(filesDir, "real_esrgan_x4plus_f32.tflite.part")
-            var connection: HttpURLConnection? = null
-            var resultMessage: String
-
-            try {
-                val activeConnection =
-                    (URL(PHOTO_MODEL_URL).openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 30_000
-                        readTimeout = 120_000
-                        requestMethod = "GET"
-                        setRequestProperty(
-                            "User-Agent",
-                            "PrivatePhotoEnhancer/1.0"
-                        )
-                    }
-                connection = activeConnection
-                activeConnection.connect()
-
-                if (activeConnection.responseCode !in 200..299) {
-                    throw Exception(
-                        "Model download failed (HTTP ${activeConnection.responseCode})"
-                    )
-                }
-
-                var downloaded = 0L
-                var lastProgressBucket = -1L
-
-                activeConnection.inputStream.use { input ->
-                    temporaryFile.outputStream().use { output ->
-                        val buffer = ByteArray(64 * 1024)
-
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-
-                            downloaded += count
-                            if (downloaded > PHOTO_MODEL_BYTES) {
-                                throw Exception(
-                                    "Downloaded model was larger than expected"
-                                )
-                            }
-
-                            output.write(buffer, 0, count)
-
-                            val progressBucket =
-                                downloaded / (5L * 1024L * 1024L)
-
-                            if (progressBucket != lastProgressBucket) {
-                                lastProgressBucket = progressBucket
-                                val percent =
-                                    (downloaded * 100L / PHOTO_MODEL_BYTES).toInt()
-
-                                runOnUiThread {
-                                    if (!isFinishing && !isDestroyed) {
-                                        statusText.text =
-                                            "Downloading stronger model: $percent%"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (temporaryFile.length() != PHOTO_MODEL_BYTES) {
-                    throw Exception("Downloaded model size did not match the verified file")
-                }
-
-                val digest = MessageDigest.getInstance("SHA-256")
-                temporaryFile.inputStream().use { input ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        digest.update(buffer, 0, count)
-                    }
-                }
-
-                val actualHash = digest.digest().joinToString("") {
-                    "%02x".format(it.toInt() and 0xff)
-                }
-
-                if (!actualHash.equals(PHOTO_MODEL_SHA256, ignoreCase = true)) {
-                    throw Exception("Model checksum verification failed")
-                }
-
-                if (photoQualityModelFile.exists()) {
-                    photoQualityModelFile.delete()
-                }
-
-                if (!temporaryFile.renameTo(photoQualityModelFile)) {
-                    throw Exception("Could not install the downloaded model")
-                }
-
-                resultMessage =
-                    "Stronger photo model installed and verified. New enhancements will use Real-ESRGAN x4plus."
-
-            } catch (e: Exception) {
-                temporaryFile.delete()
-                resultMessage =
-                    "Model download failed: ${e.message ?: "unknown error"}. Your existing model is still available."
-            } finally {
-                connection?.disconnect()
-            }
-
-            runOnUiThread {
-                if (isFinishing || isDestroyed) return@runOnUiThread
-                isDownloadingModel = false
-                setControlsEnabled(true)
-                updatePhotoModelButton()
-                statusText.text = resultMessage
-            }
-        }
-    }
-
     private fun testAiModel() {
         if (isModelTesting || isProcessing || isSaving) return
 
@@ -610,7 +421,12 @@ class MainActivity : Activity() {
                     LiteRt.initialize(applicationContext)
                 )
 
-                model = createActiveModel(environment)
+                model = CompiledModel.create(
+                    assets,
+                    modelFile,
+                    CompiledModel.Options(Accelerator.CPU),
+                    environment
+                )
 
                 inputs = model.createInputBuffers()
                 outputs = model.createOutputBuffers()
@@ -993,7 +809,12 @@ class MainActivity : Activity() {
                 LiteRt.initialize(applicationContext)
             )
 
-            model = createActiveModel(environment)
+            model = CompiledModel.create(
+                assets,
+                modelFile,
+                CompiledModel.Options(Accelerator.CPU),
+                environment
+            )
 
             inputBuffers = model.createInputBuffers()
             outputBuffers = model.createOutputBuffers()
