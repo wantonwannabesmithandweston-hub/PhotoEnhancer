@@ -481,7 +481,7 @@ class MainActivity : Activity() {
             var resultMessage: String
 
             try {
-                connection =
+                val activeConnection =
                     (URL(PHOTO_MODEL_URL).openConnection() as HttpURLConnection).apply {
                         connectTimeout = 30_000
                         readTimeout = 120_000
@@ -491,19 +491,19 @@ class MainActivity : Activity() {
                             "PrivatePhotoEnhancer/1.0"
                         )
                     }
+                connection = activeConnection
+                activeConnection.connect()
 
-                connection.connect()
-
-                if (connection.responseCode !in 200..299) {
+                if (activeConnection.responseCode !in 200..299) {
                     throw Exception(
-                        "Model download failed (HTTP ${connection.responseCode})"
+                        "Model download failed (HTTP ${activeConnection.responseCode})"
                     )
                 }
 
                 var downloaded = 0L
                 var lastProgressBucket = -1L
 
-                connection.inputStream.use { input ->
+                activeConnection.inputStream.use { input ->
                     temporaryFile.outputStream().use { output ->
                         val buffer = ByteArray(64 * 1024)
 
