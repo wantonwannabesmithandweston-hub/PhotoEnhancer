@@ -49,6 +49,7 @@ class MainActivity : Activity() {
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
     private lateinit var downloadFaceModelButton: Button
+    private lateinit var faceRestoreToggleButton: Button
     private lateinit var instructionsInput: EditText
 
     private var selectedStrength = "Balanced"
@@ -68,6 +69,7 @@ class MainActivity : Activity() {
     private var isSaving = false
     private var isModelTesting = false
     private var isDownloadingFaceModel = false
+    private var isFaceRestoreEnabled = false
 
     private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
 
@@ -304,6 +306,28 @@ class MainActivity : Activity() {
         layout.addView(downloadFaceModelButton)
         downloadFaceModelButton.setOnClickListener { downloadFaceRestoreModel() }
 
+        faceRestoreToggleButton = Button(this).apply {
+            text = "Face Restoration: OFF"
+        }
+        layout.addView(faceRestoreToggleButton)
+        faceRestoreToggleButton.setOnClickListener {
+            if (!isFaceRestoreModelInstalled()) {
+                statusText.text = "Download the face-restoration model first."
+            } else {
+                isFaceRestoreEnabled = !isFaceRestoreEnabled
+                faceRestoreToggleButton.text = if (isFaceRestoreEnabled) {
+                    "Face Restoration: ON (conservative blend)"
+                } else {
+                    "Face Restoration: OFF"
+                }
+                statusText.text = if (isFaceRestoreEnabled) {
+                    "Face restoration will run after AI upscaling. Processing stays on this phone."
+                } else {
+                    "Face restoration is turned off."
+                }
+            }
+        }
+
         saveButton = Button(this).apply {
             text = "Save Enhanced Photo to Gallery"
             isEnabled = false
@@ -390,6 +414,7 @@ class MainActivity : Activity() {
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
         downloadFaceModelButton.isEnabled = enabled && !isFaceRestoreModelInstalled()
+        faceRestoreToggleButton.isEnabled = enabled
         instructionsInput.isEnabled = enabled
 
         saveButton.isEnabled =
@@ -1152,6 +1177,28 @@ class MainActivity : Activity() {
                             }
                         }
                     }
+
+                    if (isFaceRestoreEnabled) {
+                        try {
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) statusText.text = "Detecting and restoring faces on this phone..."
+                            }
+                            val base = aiBitmap ?: throw Exception("AI image is missing")
+                            val faceResult = GfpganFaceRestorer.restore(
+                                applicationContext, base, source, strength
+                            ) { completed, total ->
+                                runOnUiThread {
+                                    if (!isFinishing && !isDestroyed) statusText.text = "Restoring face $completed of $total..."
+                                }
+                            }
+                            base.recycle()
+                            aiBitmap = faceResult
+                        } catch (faceError: Exception) {
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) statusText.text = "Face restoration unavailable (${faceError.message}). Continuing with standard AI enhancement..."
+                            }
+                        }
+                    }
                 } finally {
                     source.recycle()
                 }
@@ -1196,8 +1243,11 @@ class MainActivity : Activity() {
                     isProcessing = false
                     setControlsEnabled(true)
 
-                    statusText.text =
+                    statusText.text = if (isFaceRestoreEnabled) {
+                        "Complete! 4× AI upscale with optional face restoration • $mode • $strength strength."
+                    } else {
                         "Complete! 4× AI upscale • $mode • $strength strength."
+                    }
 
                     Toast.makeText(
                         this,
