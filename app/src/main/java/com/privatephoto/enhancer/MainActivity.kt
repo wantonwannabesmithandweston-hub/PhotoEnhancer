@@ -48,7 +48,11 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
+    private lateinit var downloadFaceModelButton: Button
+    private lateinit var faceRestoreToggleButton: Button
     private lateinit var instructionsInput: EditText
+    private lateinit var advancedSettingsLayout: LinearLayout
+    private lateinit var advancedSettingsButton: Button
 
     private var selectedStrength = "Balanced"
     private var selectedMode = "Natural Restore"
@@ -66,6 +70,8 @@ class MainActivity : Activity() {
     private var isProcessing = false
     private var isSaving = false
     private var isModelTesting = false
+    private var isDownloadingFaceModel = false
+    private var isFaceRestoreEnabled = false
 
     private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
 
@@ -73,7 +79,7 @@ class MainActivity : Activity() {
         private const val TILE_SIZE = 128
         private const val OUTPUT_TILE_SIZE = 512
         private const val CHANNELS = 3
-        private const val TILE_STRIDE = 96
+        private const val TILE_STRIDE = 112
 
         private const val INPUT_ELEMENTS =
             TILE_SIZE * TILE_SIZE * CHANNELS
@@ -89,6 +95,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Automatically use face restoration when its model is already installed.
+        isFaceRestoreEnabled = isFaceRestoreModelInstalled()
 
         val scroll = ScrollView(this)
 
@@ -96,7 +104,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(20), dp(12), dp(20))
-            setBackgroundColor(Color.rgb(20, 20, 20))
+            setBackgroundColor(Color.rgb(16, 20, 27))
         }
 
         val title = TextView(this).apply {
@@ -108,7 +116,7 @@ class MainActivity : Activity() {
         layout.addView(title)
 
         val subtitle = TextView(this).apply {
-            text = "Free Offline AI Photo Editing"
+            text = "Private • Free • On-device AI editing"
             textSize = 14f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -116,7 +124,7 @@ class MainActivity : Activity() {
         layout.addView(subtitle)
 
         photoView = ZoomableImageView(this).apply {
-            setBackgroundColor(Color.rgb(35, 35, 35))
+            setBackgroundColor(Color.rgb(28, 35, 45))
             scaleType = ImageView.ScaleType.MATRIX
         }
 
@@ -144,7 +152,7 @@ class MainActivity : Activity() {
         }
 
         uploadButton = Button(this).apply {
-            text = "Upload Picture"
+            text = "＋ Choose a Photo"
         }
         layout.addView(uploadButton)
 
@@ -160,6 +168,25 @@ class MainActivity : Activity() {
             }
         }
 
+        advancedSettingsButton = Button(this).apply {
+            text = "⚙ Advanced Settings  +"
+            isAllCaps = false
+        }
+        layout.addView(advancedSettingsButton)
+
+        advancedSettingsLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(Color.rgb(30, 30, 30))
+        }
+        layout.addView(advancedSettingsLayout)
+
+        advancedSettingsButton.setOnClickListener {
+            val expanded = advancedSettingsLayout.visibility != android.view.View.VISIBLE
+            advancedSettingsLayout.visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
+            advancedSettingsButton.text = if (expanded) "⚙ Advanced Settings  −" else "⚙ Advanced Settings  +"
+        }
         val instructionTitle = TextView(this).apply {
             text = "Custom Editing Instructions"
             textSize = 20f
@@ -167,7 +194,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(18), 0, dp(8))
         }
-        layout.addView(instructionTitle)
+        advancedSettingsLayout.addView(instructionTitle)
 
         instructionsInput = EditText(this).apply {
             hint = "Example: Make the photo brighter, improve lighting, sharpen details naturally..."
@@ -181,7 +208,7 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.rgb(48, 48, 48))
         }
 
-        layout.addView(
+        advancedSettingsLayout.addView(
             instructionsInput,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -197,7 +224,7 @@ class MainActivity : Activity() {
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
         }
-        layout.addView(instructionHelp)
+        advancedSettingsLayout.addView(instructionHelp)
 
         val modeLabel = TextView(this).apply {
             text = "Editing Mode"
@@ -206,14 +233,14 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(16), 0, dp(4))
         }
-        layout.addView(modeLabel)
+        advancedSettingsLayout.addView(modeLabel)
 
         modeText = TextView(this).apply {
             textSize = 15f
             setTextColor(Color.GREEN)
             gravity = Gravity.CENTER
         }
-        layout.addView(modeText)
+        advancedSettingsLayout.addView(modeText)
 
         val modeDescriptions = mapOf(
             "Natural Restore" to "Cleaner photos, gentler sharpening, reduced noise",
@@ -227,7 +254,7 @@ class MainActivity : Activity() {
             }
 
             modeButtons[mode] = button
-            layout.addView(button)
+            advancedSettingsLayout.addView(button)
 
             button.setOnClickListener {
                 if (!isProcessing && !isSaving && !isModelTesting) {
@@ -244,14 +271,14 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(14), 0, dp(4))
         }
-        layout.addView(strengthLabel)
+        advancedSettingsLayout.addView(strengthLabel)
 
         strengthText = TextView(this).apply {
             textSize = 17f
             setTextColor(Color.GREEN)
             gravity = Gravity.CENTER
         }
-        layout.addView(strengthText)
+        advancedSettingsLayout.addView(strengthText)
 
         listOf("Low", "Balanced", "High", "Ultra").forEach { strength ->
             val button = Button(this).apply {
@@ -259,7 +286,7 @@ class MainActivity : Activity() {
             }
 
             strengthButtons[strength] = button
-            layout.addView(button)
+            advancedSettingsLayout.addView(button)
 
             button.setOnClickListener {
                 if (!isProcessing && !isSaving && !isModelTesting) {
@@ -270,7 +297,7 @@ class MainActivity : Activity() {
         }
 
         enhanceButton = Button(this).apply {
-            text = "Enhance Photo"
+            text = "✨ Enhance Photo"
         }
         layout.addView(enhanceButton)
 
@@ -285,14 +312,47 @@ class MainActivity : Activity() {
         testAiButton = Button(this).apply {
             text = "Test AI Model"
         }
-        layout.addView(testAiButton)
+        advancedSettingsLayout.addView(testAiButton)
 
         testAiButton.setOnClickListener {
             testAiModel()
         }
 
+        downloadFaceModelButton = Button(this).apply {
+            text = if (isFaceRestoreModelInstalled()) {
+                "Face Model Downloaded"
+            } else {
+                "Download Face Restore Model (431 MB)"
+            }
+            isEnabled = !isFaceRestoreModelInstalled()
+        }
+        advancedSettingsLayout.addView(downloadFaceModelButton)
+        downloadFaceModelButton.setOnClickListener { downloadFaceRestoreModel() }
+
+        faceRestoreToggleButton = Button(this).apply {
+            text = if (isFaceRestoreEnabled) "Face Restoration: ON" else "Face Restoration: OFF"
+        }
+        advancedSettingsLayout.addView(faceRestoreToggleButton)
+        faceRestoreToggleButton.setOnClickListener {
+            if (!isFaceRestoreModelInstalled()) {
+                statusText.text = "Download the face-restoration model first."
+            } else {
+                isFaceRestoreEnabled = !isFaceRestoreEnabled
+                faceRestoreToggleButton.text = if (isFaceRestoreEnabled) {
+                    "Face Restoration: ON (conservative blend)"
+                } else {
+                    "Face Restoration: OFF"
+                }
+                statusText.text = if (isFaceRestoreEnabled) {
+                    "Face restoration will run after AI upscaling. Processing stays on this phone."
+                } else {
+                    "Face restoration is turned off."
+                }
+            }
+        }
+
         saveButton = Button(this).apply {
-            text = "Save Enhanced Photo to Gallery"
+            text = "↓ Save to Gallery"
             isEnabled = false
         }
         layout.addView(saveButton)
@@ -325,10 +385,61 @@ class MainActivity : Activity() {
         statusText.text = "Upload a photo to get started"
     }
 
+    private fun faceRestoreModelFile(): java.io.File =
+        java.io.File(filesDir, "gfpgan_fp16.tflite")
+
+    private fun isFaceRestoreModelInstalled(): Boolean =
+        faceRestoreModelFile().exists() && faceRestoreModelFile().length() >= 400_000_000L
+
+    private fun downloadFaceRestoreModel() {
+        if (isDownloadingFaceModel || isProcessing || isSaving || isModelTesting) return
+        if (faceRestoreModelFile().exists() && faceRestoreModelFile().length() >= 400_000_000L) {
+            statusText.text = "Face restoration model is already downloaded."
+            return
+        }
+        isDownloadingFaceModel = true
+        setControlsEnabled(false)
+        downloadFaceModelButton.text = "Downloading Face Restore Model..."
+        statusText.text = "Downloading the 431 MB model. Keep the app open; Wi-Fi is recommended."
+        executor.execute {
+            try {
+                val file = GfpganModelDownloader.download(applicationContext) { downloaded, total ->
+                    val message = if (total > 0L) {
+                        val percent = (downloaded * 100L / total).toInt().coerceIn(0, 100)
+                        "Downloading face model: $percent% (${downloaded / (1024L * 1024L)} / ${total / (1024L * 1024L)} MB)"
+                    } else {
+                        "Downloading face model: ${downloaded / (1024L * 1024L)} MB"
+                    }
+                    runOnUiThread { if (!isFinishing && !isDestroyed) statusText.text = message }
+                }
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    isDownloadingFaceModel = false
+                    isFaceRestoreEnabled = true
+                    faceRestoreToggleButton.text = "Face Restoration: ON"
+                    downloadFaceModelButton.text = "Face Restore Model Ready"
+                    setControlsEnabled(true)
+                    statusText.text = "Face restoration is ready and enabled. GFPGAN will run after photo upscaling on this phone."
+                    Toast.makeText(this, "Face model downloaded successfully!", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    isDownloadingFaceModel = false
+                    downloadFaceModelButton.text = "Download Face Restore Model (431 MB)"
+                    setControlsEnabled(true)
+                    statusText.text = "Face model download failed: ${e.message}"
+                }
+            }
+        }
+    }
+
     private fun setControlsEnabled(enabled: Boolean) {
         enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
+        downloadFaceModelButton.isEnabled = enabled && !isFaceRestoreModelInstalled()
+        faceRestoreToggleButton.isEnabled = enabled
         instructionsInput.isEnabled = enabled
 
         saveButton.isEnabled =
@@ -1040,6 +1151,7 @@ class MainActivity : Activity() {
         executor.execute {
             var aiBitmap: Bitmap? = null
             var finalBitmap: Bitmap? = null
+            var restoredFaceCount = 0
 
             try {
                 val bytes = readPhotoBytes(uri)
@@ -1091,6 +1203,29 @@ class MainActivity : Activity() {
                             }
                         }
                     }
+
+                    if (isFaceRestoreEnabled) {
+                        try {
+                            runOnUiThread {
+                                if (!isFinishing && !isDestroyed) statusText.text = "Detecting and restoring faces on this phone..."
+                            }
+                            val base = aiBitmap ?: throw Exception("AI image is missing")
+                            val faceResult = GfpganFaceRestorer.restore(
+                                applicationContext, base, source, strength
+                            ) { completed, total ->
+                                restoredFaceCount = completed
+                                runOnUiThread {
+                                    if (!isFinishing && !isDestroyed) {
+                                        statusText.text = if (total == 0) "No faces detected; finishing photo enhancement..." else "Restoring face $completed of $total..."
+                                    }
+                                }
+                            }
+                            base.recycle()
+                            aiBitmap = faceResult
+                        } catch (faceError: Exception) {
+                            throw IllegalStateException("GFPGAN face restoration failed: ${faceError.message}", faceError)
+                        }
+                    }
                 } finally {
                     source.recycle()
                 }
@@ -1135,8 +1270,13 @@ class MainActivity : Activity() {
                     isProcessing = false
                     setControlsEnabled(true)
 
-                    statusText.text =
+                    statusText.text = if (isFaceRestoreEnabled && restoredFaceCount > 0) {
+                        "Complete! 4× AI upscale + GFPGAN restored $restoredFaceCount face(s) • $mode • $strength strength."
+                    } else if (isFaceRestoreEnabled) {
+                        "Complete! 4× AI upscale. No face could be aligned for restoration; standard photo enhancement is complete."
+                    } else {
                         "Complete! 4× AI upscale • $mode • $strength strength."
+                    }
 
                     Toast.makeText(
                         this,
