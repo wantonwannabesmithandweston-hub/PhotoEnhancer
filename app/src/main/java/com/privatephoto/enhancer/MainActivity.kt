@@ -377,7 +377,8 @@ class MainActivity : Activity() {
         updateStrengthButtons()
         updateModeButtons()
         updatePhotoModelButton()
-        statusText.text = "Upload a photo to get started"\n        observeCloudEnhancement()
+        statusText.text = "Upload a photo to get started"
+        observeCloudEnhancement()
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
@@ -1683,52 +1684,49 @@ class MainActivity : Activity() {
         }
     }
 
+    private var cloudWorkLiveData: androidx.lifecycle.LiveData<List<androidx.work.WorkInfo>>? = null
+    private var cloudWorkObserver: androidx.lifecycle.Observer<List<androidx.work.WorkInfo>>? = null
+
     private fun observeCloudEnhancement() {
-        androidx.work.WorkManager.getInstance(applicationContext)
+        val liveData = androidx.work.WorkManager.getInstance(applicationContext)
             .getWorkInfosForUniqueWorkLiveData(CloudEnhancementWorker.UNIQUE_WORK_NAME)
-            .observe(this) { infos ->
-                val info = infos?.firstOrNull() ?: return@observe
-                when (info.state) {
-                    androidx.work.WorkInfo.State.ENQUEUED ->
-                        statusText.text = "Cloud enhancement queued. It will continue in the background..."
-                    androidx.work.WorkInfo.State.RUNNING ->
-                        statusText.text = "Enhancing photo in the background... You can safely leave the app."
-                    androidx.work.WorkInfo.State.SUCCEEDED -> {
-                        val resultUri = info.outputData.getString(CloudEnhancementWorker.KEY_OUTPUT_URI)
-                        if (resultUri != null) {
-                            try {
-                                val bitmap = contentResolver.openInputStream(Uri.parse(resultUri))?.use {
-                                    BitmapFactory.decodeStream(it)
-                                } ?: throw Exception("Could not load the enhanced image")
-                                enhancedBitmap?.let { if (!it.isRecycled) it.recycle() }
-                                enhancedBitmap = bitmap
-                                isShowingEnhanced = true
-                                displayCurrentPhoto()
-                                statusText.text = "Cloud restoration complete! Photo automatically saved to your gallery."
-                            } catch (e: Exception) {
-                                statusText.text = "Enhancement finished, but preview failed: ${e.message}"
+        cloudWorkLiveData = liveData
+        val observer = androidx.lifecycle.Observer<List<androidx.work.WorkInfo>> { infos ->
+            val info = infos?.firstOrNull() ?: return@Observer
+            when (info.state) {
+                androidx.work.WorkInfo.State.ENQUEUED ->
+                    statusText.text = "Cloud enhancement queued. It will continue in the background..."
+                androidx.work.WorkInfo.State.RUNNING ->
+                    statusText.text = "Enhancing photo in the background... You can safely leave the app."
+                androidx.work.WorkInfo.State.SUCCEEDED -> {
+                    val resultUri = info.outputData.getString(CloudEnhancementWorker.KEY_OUTPUT_URI)
+                    if (resultUri != null) {
+                        try {
+                            contentResolver.openInputStream(Uri.parse(resultUri))?.use { stream ->
+                                enhancedBitmap = BitmapFactory.decodeStream(stream)
                             }
-                        } else {
-                            statusText.text = "Cloud restoration finished. Check your gallery."
+                            enhancedBitmap?.let {
+                                photoView.setImageBitmap(it)
+                                isShowingEnhanced = true
+                                compareButton.text = "View Original Photo"
+                            }
+                            statusText.text = "Enhancement complete. Saved to your gallery."
+                        } catch (e: Exception) {
+                            statusText.text = "Enhancement saved to gallery."
                         }
-                        isProcessing = false
-                        setControlsEnabled(true)
+                    } else {
+                        statusText.text = "Enhancement complete. Saved to your gallery."
                     }
-                    androidx.work.WorkInfo.State.FAILED -> {
-                        val message = info.outputData.getString(CloudEnhancementWorker.KEY_ERROR)
-                            ?: "Cloud restoration failed. Please try again."
-                        statusText.text = message
-                        isProcessing = false
-                        setControlsEnabled(true)
-                    }
-                    androidx.work.WorkInfo.State.CANCELLED -> {
-                        statusText.text = "Cloud enhancement was cancelled."
-                        isProcessing = false
-                        setControlsEnabled(true)
-                    }
-                    else -> Unit
                 }
+                androidx.work.WorkInfo.State.FAILED ->
+                    statusText.text = "Cloud enhancement failed. Please try again."
+                androidx.work.WorkInfo.State.CANCELLED ->
+                    statusText.text = "Cloud enhancement cancelled."
+                else -> Unit
             }
+        }
+        cloudWorkObserver = observer
+        liveData.observeForever(observer)
     }
 
     private fun saveEnhancedPhoto() {
@@ -1955,6 +1953,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        cloudWorkObserver?.let { observer -> cloudWorkLiveData?.removeObserver(observer) }
+        cloudWorkObserver = null
+        cloudWorkLiveData = null
         executor.shutdownNow()
 
         if (::photoView.isInitialized) {
