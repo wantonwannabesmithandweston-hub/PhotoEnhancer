@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
 import android.os.Build
+import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.work.CoroutineWorker
@@ -26,6 +27,7 @@ class CloudEnhancementWorker(
     companion object {
         const val UNIQUE_WORK_NAME = "private_photo_cloud_enhancement"
         const val KEY_INPUT_PATH = "input_path"
+        const val KEY_INPUT_URI = "input_uri"
         const val KEY_STRENGTH = "strength"
         const val KEY_MIME_TYPE = "mime_type"
         const val KEY_OUTPUT_URI = "output_uri"
@@ -38,15 +40,22 @@ class CloudEnhancementWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val source = inputData.getString(KEY_INPUT_PATH)?.let(::File)
-            ?: return@withContext Result.failure(errorData("Missing photo file"))
-        if (!source.isFile || source.length() !in 1..MAX_UPLOAD.toLong()) {
-            source.delete()
-            return@withContext Result.failure(errorData("Photo is empty or exceeds 20 MB."))
+        val sourceUri = inputData.getString(KEY_INPUT_URI)?.let(Uri::parse)
+        if (source == null && sourceUri == null) {
+            return@withContext Result.failure(errorData("Missing selected photo. Please choose the photo again."))
         }
 
         try {
             setForeground(createForegroundInfo("Preparing photo..."))
-            val bytes = source.readBytes()
+            val bytes = if (sourceUri != null) {
+                applicationContext.contentResolver.openInputStream(sourceUri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("Android could not reopen the selected photo.")
+            } else {
+                source!!.readBytes()
+            }
+            if (bytes.isEmpty() || bytes.size > MAX_UPLOAD) {
+                throw IllegalStateException("Photo is empty or exceeds 20 MB.")
+            }
             val boundary = "----PrivatePhotoEnhancer${id}"
             val strength = inputData.getString(KEY_STRENGTH) ?: "Balanced"
             val mimeType = inputData.getString(KEY_MIME_TYPE) ?: "image/jpeg"
@@ -97,13 +106,13 @@ class CloudEnhancementWorker(
             if (responseBytes.isEmpty()) throw IllegalStateException("Cloud returned an empty image.")
             setForeground(createForegroundInfo("Saving enhanced photo..."))
             val savedUri = saveImage(responseBytes)
-            source.delete()
+            source?.delete()
             Result.success(Data.Builder().putString(KEY_OUTPUT_URI, savedUri.toString()).build())
         } catch (e: Exception) {
             if (runAttemptCount < 4 && (e is java.io.IOException || e is java.net.SocketTimeoutException)) {
                 Result.retry()
             } else {
-                source.delete()
+                source?.delete()
                 Result.failure(errorData("Cloud enhancement failed: ${e.message ?: "Please try again."}"))
             }
         }
