@@ -77,11 +77,21 @@ object GfpganFaceRestorer {
             val output = outputs[0]
             val scaleX = enhanced.width.toDouble() / detectionImage.width.toDouble()
             val scaleY = enhanced.height.toDouble() / detectionImage.height.toDouble()
-            val blend = when (strength) { "Low" -> 0.32f; "High" -> 0.58f; "Ultra" -> 0.66f; else -> 0.46f }
+            // A stronger but still identity-conscious blend makes the restoration visible.
+            val blend = when (strength) { "Low" -> 0.48f; "High" -> 0.76f; "Ultra" -> 0.84f; else -> 0.65f }
+            var restoredCount = 0
 
             faces.forEachIndexed { index, face ->
-                val points = faceLandmarks(face, scaleX, scaleY) ?: return@forEachIndexed
-                val transform = fitSimilarity(points, templatePoints()) ?: return@forEachIndexed
+                val points = faceLandmarks(face, scaleX, scaleY)
+                if (points == null) {
+                    onProgress(restoredCount, faces.size)
+                    return@forEachIndexed
+                }
+                val transform = fitSimilarity(points, templatePoints())
+                if (transform == null) {
+                    onProgress(restoredCount, faces.size)
+                    return@forEachIndexed
+                }
                 val aligned = Bitmap.createBitmap(FACE_SIZE, FACE_SIZE, Bitmap.Config.ARGB_8888)
                 Canvas(aligned).drawBitmap(result, transform.matrix(), Paint(Paint.FILTER_BITMAP_FLAG))
                 val tensor = FloatArray(3 * FACE_SIZE * FACE_SIZE)
@@ -126,7 +136,8 @@ object GfpganFaceRestorer {
                 }
                 aligned.recycle()
                 restored.recycle()
-                onProgress(index + 1, faces.size)
+                restoredCount++
+                onProgress(restoredCount, faces.size)
             }
             return result
         } catch (e: Exception) {
