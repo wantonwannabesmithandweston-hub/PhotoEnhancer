@@ -33,6 +33,7 @@ kotlin {
 dependencies {
     // Existing Real-ESRGAN support
     implementation("com.google.android.gms:play-services-litert:17.0.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     // On-device text recognition (bundled model)
