@@ -1634,7 +1634,7 @@ class MainActivity : Activity() {
 
         executor.execute {
             try {
-                val source = File(cacheDir, "cloud_input_${System.currentTimeMillis()}.img")
+                val source = File(filesDir, "cloud_input_${System.currentTimeMillis()}.img")
                 contentResolver.openInputStream(uri)?.use { input ->
                     source.outputStream().use { output -> input.copyTo(output) }
                 } ?: throw Exception("Cannot read selected photo")
@@ -1650,6 +1650,11 @@ class MainActivity : Activity() {
                 )
                 val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
                     .setInputData(input)
+                    .setConstraints(
+                        androidx.work.Constraints.Builder()
+                            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                            .build()
+                    )
                     .setBackoffCriteria(
                         androidx.work.BackoffPolicy.EXPONENTIAL,
                         30,
@@ -1666,7 +1671,6 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     statusText.text = "Cloud enhancement is running in the background. You can leave the app."
-                    observeCloudEnhancement()
                 }
             } catch (e: Exception) {
                 runOnUiThread {
