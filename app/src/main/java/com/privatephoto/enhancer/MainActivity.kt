@@ -1016,6 +1016,7 @@ class MainActivity : Activity() {
         progress: (Int, Int) -> Unit
     ): Bitmap {
         val environment = OrtEnvironment.getEnvironment()
+        environment.setTelemetry(false)
         val options = OrtSession.SessionOptions()
         var session: OrtSession? = null
         var destination: Bitmap? = null
