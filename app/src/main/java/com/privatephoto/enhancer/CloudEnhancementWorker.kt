@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.ContentValues
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -13,7 +12,6 @@ import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.Data
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -29,6 +27,7 @@ class CloudEnhancementWorker(
         const val UNIQUE_WORK_NAME = "private_photo_cloud_enhancement"
         const val KEY_INPUT_PATH = "input_path"
         const val KEY_STRENGTH = "strength"
+        const val KEY_MIME_TYPE = "mime_type"
         const val KEY_OUTPUT_URI = "output_uri"
         const val KEY_ERROR = "error"
         private const val CHANNEL_ID = "photo_enhancement"
@@ -50,6 +49,8 @@ class CloudEnhancementWorker(
             val bytes = source.readBytes()
             val boundary = "----PrivatePhotoEnhancer${id}"
             val strength = inputData.getString(KEY_STRENGTH) ?: "Balanced"
+            val mimeType = inputData.getString(KEY_MIME_TYPE) ?: "image/jpeg"
+            val fileName = if (mimeType == "image/png") "photo.png" else "photo.jpg"
             val connection = (URL("$SERVER/enhance").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 45_000
@@ -68,7 +69,7 @@ class CloudEnhancementWorker(
                     writeText("$strength\r\n")
                     writeText("--$boundary\r\n")
                     writeText("Content-Disposition: form-data; name=\"image\"; filename=\"photo.jpg\"\r\n")
-                    writeText("Content-Type: image/jpeg\r\n\r\n")
+                    writeText("Content-Type: $mimeType\r\n\r\n")
                     output.write(bytes)
                     writeText("\r\n--$boundary--\r\n")
                     output.flush()
@@ -87,12 +88,12 @@ class CloudEnhancementWorker(
                 responseBytes = connection.inputStream.use { it.readBytes() }
             } finally {
                 connection.disconnect()
-                source.delete()
             }
 
             if (responseBytes.isEmpty()) throw IllegalStateException("Cloud returned an empty image.")
             setForeground(createForegroundInfo("Saving enhanced photo..."))
             val savedUri = saveImage(responseBytes)
+            source.delete()
             Result.success(Data.Builder().putString(KEY_OUTPUT_URI, savedUri.toString()).build())
         } catch (e: Exception) {
             if (runAttemptCount < 4 && (e is java.io.IOException || e is java.net.SocketTimeoutException)) {
