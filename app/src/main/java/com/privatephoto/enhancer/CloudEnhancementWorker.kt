@@ -32,6 +32,7 @@ class CloudEnhancementWorker(
         const val KEY_MIME_TYPE = "mime_type"
         const val KEY_OUTPUT_URI = "output_uri"
         const val KEY_ERROR = "error"
+        const val KEY_STARTED_AT = "started_at_ms"
         private const val CHANNEL_ID = "photo_enhancement"
         private const val NOTIFICATION_ID = 4107
         private const val SERVER = "https://photoenhancer.onrender.com"
@@ -60,6 +61,7 @@ class CloudEnhancementWorker(
             val strength = inputData.getString(KEY_STRENGTH) ?: "Balanced"
             val mimeType = inputData.getString(KEY_MIME_TYPE) ?: "image/jpeg"
             val fileName = if (mimeType == "image/png") "photo.png" else "photo.jpg"
+            setProgress(Data.Builder().putLong(KEY_STARTED_AT, System.currentTimeMillis()).build())
             val connection = (URL("$SERVER/enhance").openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 45_000
