@@ -48,6 +48,7 @@ class MainActivity : Activity() {
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
+    private lateinit var downloadFaceModelButton: Button
     private lateinit var instructionsInput: EditText
 
     private var selectedStrength = "Balanced"
@@ -66,6 +67,7 @@ class MainActivity : Activity() {
     private var isProcessing = false
     private var isSaving = false
     private var isModelTesting = false
+    private var isDownloadingFaceModel = false
 
     private val modelFile = "Real-ESRGAN-General-x4v3.tflite"
 
@@ -291,6 +293,17 @@ class MainActivity : Activity() {
             testAiModel()
         }
 
+        downloadFaceModelButton = Button(this).apply {
+            text = if (faceRestoreModelFile().exists()) {
+                "Face Restore Model Ready"
+            } else {
+                "Download Face Restore Model (431 MB)"
+            }
+            isEnabled = !faceRestoreModelFile().exists()
+        }
+        layout.addView(downloadFaceModelButton)
+        downloadFaceModelButton.setOnClickListener { downloadFaceRestoreModel() }
+
         saveButton = Button(this).apply {
             text = "Save Enhanced Photo to Gallery"
             isEnabled = false
@@ -325,10 +338,54 @@ class MainActivity : Activity() {
         statusText.text = "Upload a photo to get started"
     }
 
-    private fun setControlsEnabled(enabled: Boolean) {
-        enhanceButton.isEnabled = enabled
+    private fun faceRestoreModelFile(): java.io.File =
+        java.io.File(filesDir, "gfpgan_fp16.tflite")
+
+    private fun downloadFaceRestoreModel() {
+        if (isDownloadingFaceModel || isProcessing || isSaving || isModelTesting) return
+        if (faceRestoreModelFile().exists() && faceRestoreModelFile().length() >= 400_000_000L) {
+            statusText.text = "Face restoration model is already downloaded."
+            return
+        }
+        isDownloadingFaceModel = true
+        setControlsEnabled(false)
+        downloadFaceModelButton.text = "Downloading Face Restore Model..."
+        statusText.text = "Downloading the 431 MB model. Keep the app open; Wi-Fi is recommended."
+        executor.execute {
+            try {
+                val file = GfpganModelDownloader.download(applicationContext) { downloaded, total ->
+                    val message = if (total > 0L) {
+                        val percent = (downloaded * 100L / total).toInt().coerceIn(0, 100)
+                        "Downloading face model: $percent% (${downloaded / (1024L * 1024L)} / ${total / (1024L * 1024L)} MB)"
+                    } else {
+                        "Downloading face model: ${downloaded / (1024L * 1024L)} MB"
+                    }
+                    runOnUiThread { if (!isFinishing && !isDestroyed) statusText.text = message }
+                }
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    isDownloadingFaceModel = false
+                    downloadFaceModelButton.text = "Face Restore Model Ready"
+                    setControlsEnabled(true)
+                    statusText.text = "Face model downloaded (${file.length() / (1024L * 1024L)} MB). It is stored on this phone. The next step is connecting it to face detection and enhancement."
+                    Toast.makeText(this, "Face model downloaded successfully!", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    isDownloadingFaceModel = false
+                    downloadFaceModelButton.text = "Download Face Restore Model (431 MB)"
+                    setControlsEnabled(true)
+                    statusText.text = "Face model download failed: ${e.message}"
+                }
+            }
+        }
+    }
+
+    private fun setControlsEnabled(enabled: Boolean) {        enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
+        downloadFaceModelButton.isEnabled = enabled && !faceRestoreModelFile().exists()
         instructionsInput.isEnabled = enabled
 
         saveButton.isEnabled =
