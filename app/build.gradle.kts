@@ -14,6 +14,12 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+
+        // This personal-use build targets the user's modern 64-bit Android phone.
+        // Avoid bundling unused x86 and 32-bit native runtimes in the APK.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     compileOptions {
