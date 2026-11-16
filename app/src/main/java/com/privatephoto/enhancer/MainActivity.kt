@@ -131,7 +131,7 @@ class MainActivity : Activity() {
         layout.addView(title)
 
         val subtitle = TextView(this).apply {
-            text = "Free Offline AI Photo Editing"
+            text = "Offline AI + Optional Free Cloud Restoration"
             textSize = 14f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -303,7 +303,7 @@ class MainActivity : Activity() {
         layout.addView(cloudEnhanceButton)
 
         val cloudPrivacyNote = TextView(this).apply {
-            text = "Cloud mode sends this photo to Render and Hugging Face. Use Offline Enhance to keep it on your phone."
+            text = "Cloud mode sends this photo to Render and Hugging Face for restoration. Custom instructions apply to Offline Enhance only."
             textSize = 12f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -1631,7 +1631,6 @@ class MainActivity : Activity() {
 
         isProcessing = true
         val strength = selectedStrength
-        val prompt = instructionsInput.text.toString().trim()
         setControlsEnabled(false)
         statusText.text = "Connecting to free cloud restoration... This can take a minute."
 
@@ -1667,10 +1666,6 @@ class MainActivity : Activity() {
                     writeText("--$boundary\r\n")
                     writeText("Content-Disposition: form-data; name=\"strength\"\r\n\r\n")
                     writeText("$strength\r\n")
-
-                    writeText("--$boundary\r\n")
-                    writeText("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n")
-                    writeText("$prompt\r\n")
 
                     writeText("--$boundary\r\n")
                     writeText("Content-Disposition: form-data; name=\"image\"; filename=\"$fileName\"\r\n")
