@@ -3,6 +3,8 @@ package com.privatephoto.enhancer
 
 import android.app.Activity
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.content.Intent
 import android.content.ContentValues
 import android.graphics.Bitmap
@@ -74,6 +76,22 @@ class MainActivity : Activity() {
     private val SAVE_DOCUMENT = 101
 
     private var isProcessing = false
+    private val cloudEtaHandler = Handler(Looper.getMainLooper())
+    private var cloudStartedAtMs = 0L
+    private val cloudEtaTicker = object : Runnable {
+        override fun run() {
+            if (!isProcessing || cloudStartedAtMs <= 0L) return
+            val elapsed = ((System.currentTimeMillis() - cloudStartedAtMs) / 1000L).coerceAtLeast(0L)
+            val remaining = 180L - elapsed
+            val elapsedLabel = formatEtaTime(elapsed)
+            statusText.text = if (remaining > 0L) {
+                "Enhancing photo in the background... Estimated time remaining: about " + formatEtaTime(remaining) + ". Elapsed: " + elapsedLabel + ". You can safely leave the app."
+            } else {
+                "Enhancement is taking longer than the 3-minute estimate. Elapsed: " + elapsedLabel + ". It is still running in the background."
+            }
+            cloudEtaHandler.postDelayed(this, 15_000L)
+        }
+    }
     private var isSaving = false
     private var isModelTesting = false
     private var isDownloadingPhotoModel = false
@@ -1627,6 +1645,23 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun formatEtaTime(seconds: Long): String {
+        val minutes = seconds / 60L
+        val remainder = seconds % 60L
+        return if (minutes > 0L) minutes.toString() + "m " + remainder + "s" else remainder.toString() + "s"
+    }
+
+    private fun startCloudEta(startedAt: Long) {
+        cloudEtaHandler.removeCallbacks(cloudEtaTicker)
+        cloudStartedAtMs = if (startedAt > 0L) startedAt else System.currentTimeMillis()
+        cloudEtaTicker.run()
+    }
+
+    private fun stopCloudEta() {
+        cloudEtaHandler.removeCallbacks(cloudEtaTicker)
+        cloudStartedAtMs = 0L
+    }
+
     private fun enhancePhotoWithCloud(uri: Uri) {
         if (isProcessing || isSaving || isModelTesting) return
         isProcessing = true
@@ -1683,9 +1718,11 @@ class MainActivity : Activity() {
                     statusText.text = "Cloud enhancement queued. It will continue in the background..."
                 }
                 androidx.work.WorkInfo.State.RUNNING -> {
-                    statusText.text = "Enhancing photo in the background... You can safely leave the app."
+                    val startedAt = info.progress.getLong(CloudEnhancementWorker.KEY_STARTED_AT, 0L)
+                    startCloudEta(startedAt)
                 }
                 androidx.work.WorkInfo.State.SUCCEEDED -> {
+                    stopCloudEta()
                     isProcessing = false
                     setControlsEnabled(true)
                     val resultUri = info.outputData.getString(CloudEnhancementWorker.KEY_OUTPUT_URI)
@@ -1714,6 +1751,7 @@ class MainActivity : Activity() {
                     }
                 }
                 androidx.work.WorkInfo.State.FAILED -> {
+                    stopCloudEta()
                     isProcessing = false
                     setControlsEnabled(true)
                     val detail = info.outputData.getString(CloudEnhancementWorker.KEY_ERROR)
@@ -1722,6 +1760,7 @@ class MainActivity : Activity() {
                     Toast.makeText(this, "Cloud enhancement failed. Open the app to see the error.", Toast.LENGTH_LONG).show()
                 }
                 androidx.work.WorkInfo.State.CANCELLED -> {
+                    stopCloudEta()
                     isProcessing = false
                     setControlsEnabled(true)
                     statusText.text = "Cloud enhancement was cancelled before the photo was saved."
@@ -1962,6 +2001,7 @@ class MainActivity : Activity() {
         cloudWorkObserver?.let { observer -> cloudWorkLiveData?.removeObserver(observer) }
         cloudWorkObserver = null
         cloudWorkLiveData = null
+        stopCloudEta()
         executor.shutdownNow()
 
         if (::photoView.isInitialized) {
