@@ -450,6 +450,7 @@ class MainActivity : Activity() {
 
     private fun validatePhotoModel(file: File) {
         val environment = OrtEnvironment.getEnvironment()
+        environment.setTelemetry(false)
         val options = OrtSession.SessionOptions()
         var session: OrtSession? = null
         var inputTensor: OnnxTensor? = null
