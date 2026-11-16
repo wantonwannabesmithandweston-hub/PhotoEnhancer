@@ -31,6 +31,16 @@ kotlin {
 }
 
 dependencies {
+    // Existing Real-ESRGAN support
     implementation("com.google.android.gms:play-services-litert:17.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+
+    // On-device text recognition (bundled model)
+    implementation("com.google.mlkit:text-recognition:16.0.0-beta3")
+
+    // On-device face detection (bundled model)
+    implementation("com.google.mlkit:face-detection:16.1.7")
+
+    // Image processing and inpainting
+    implementation("org.opencv:opencv:4.10.0")
 }
