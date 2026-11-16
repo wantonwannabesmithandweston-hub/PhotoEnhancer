@@ -294,12 +294,12 @@ class MainActivity : Activity() {
         }
 
         downloadFaceModelButton = Button(this).apply {
-            text = if (faceRestoreModelFile().exists()) {
+            text = if (isFaceRestoreModelInstalled()) {
                 "Face Model Downloaded"
             } else {
                 "Download Face Restore Model (431 MB)"
             }
-            isEnabled = !faceRestoreModelFile().exists()
+            isEnabled = !isFaceRestoreModelInstalled()
         }
         layout.addView(downloadFaceModelButton)
         downloadFaceModelButton.setOnClickListener { downloadFaceRestoreModel() }
@@ -340,6 +340,9 @@ class MainActivity : Activity() {
 
     private fun faceRestoreModelFile(): java.io.File =
         java.io.File(filesDir, "gfpgan_fp16.tflite")
+
+    private fun isFaceRestoreModelInstalled(): Boolean =
+        faceRestoreModelFile().exists() && faceRestoreModelFile().length() >= 400_000_000L
 
     private fun downloadFaceRestoreModel() {
         if (isDownloadingFaceModel || isProcessing || isSaving || isModelTesting) return
@@ -386,7 +389,7 @@ class MainActivity : Activity() {
         enhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
-        downloadFaceModelButton.isEnabled = enabled && !faceRestoreModelFile().exists()
+        downloadFaceModelButton.isEnabled = enabled && !isFaceRestoreModelInstalled()
         instructionsInput.isEnabled = enabled
 
         saveButton.isEnabled =
