@@ -12,8 +12,8 @@ android {
         applicationId = "com.privatephoto.enhancer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
 
         // This personal-use build targets the user's modern 64-bit Android phone.
         // Avoid bundling unused x86 and 32-bit native runtimes in the APK.
@@ -37,7 +37,10 @@ kotlin {
 }
 
 dependencies {
-    // Persistent background cloud jobs\n    implementation("androidx.work:work-runtime-ktx:2.10.1")\n\n    // Existing Real-ESRGAN support
+    // Persistent background cloud jobs
+    implementation("androidx.work:work-runtime-ktx:2.10.1")
+
+    // Existing Real-ESRGAN support
     implementation("com.google.android.gms:play-services-litert:17.0.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
