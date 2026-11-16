@@ -68,7 +68,7 @@ class CloudEnhancementWorker(
                     writeText("Content-Disposition: form-data; name=\"strength\"\r\n\r\n")
                     writeText("$strength\r\n")
                     writeText("--$boundary\r\n")
-                    writeText("Content-Disposition: form-data; name=\"image\"; filename=\"photo.jpg\"\r\n")
+                    writeText("Content-Disposition: form-data; name=\"image\"; filename=\"$fileName\"\r\n")
                     writeText("Content-Type: $mimeType\r\n\r\n")
                     output.write(bytes)
                     writeText("\r\n--$boundary--\r\n")
