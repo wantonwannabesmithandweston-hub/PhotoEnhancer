@@ -79,11 +79,15 @@ class CloudEnhancementWorker(
                     val detail = try {
                         connection.errorStream?.bufferedReader()?.use { it.readText() }
                     } catch (_: Exception) { null }
-                    if (code >= 500 || code == 429 || code == 408) {
+                    // Retry only responses that are plausibly temporary. HTTP 500 often
+                    // means a server configuration problem (for example a missing API key);
+                    // retrying it several times only leaves the user waiting for minutes.
+                    if (code == 408 || code == 429 || code == 502 || code == 503 || code == 504) {
                         return@withContext if (runAttemptCount < 4) Result.retry()
-                        else Result.failure(errorData("Cloud service is busy after several attempts. Try again later."))
+                        else Result.failure(errorData("Cloud service is temporarily unavailable after several attempts. ${detail ?: "Please try again later."}".take(500)))
                     }
-                    return@withContext Result.failure(errorData("Cloud service error $code: ${detail ?: "Please try again."}"))
+                    val message = "Cloud service error $code: ${detail ?: "Please try again."}"
+                    return@withContext Result.failure(errorData(message.take(500)))
                 }
                 responseBytes = connection.inputStream.use { it.readBytes() }
             } finally {
