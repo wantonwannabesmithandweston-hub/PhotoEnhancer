@@ -1664,19 +1664,19 @@ class MainActivity : Activity() {
                         output.write(value.toByteArray(Charsets.UTF_8))
                     }
 
-                    writeText("--$boundary\\r\\n")
-                    writeText("Content-Disposition: form-data; name=\\"strength\\"\\r\\n\\r\\n")
-                    writeText("$strength\\r\\n")
+                    writeText("--$boundary\r\n")
+                    writeText("Content-Disposition: form-data; name=\"strength\"\r\n\r\n")
+                    writeText("$strength\r\n")
 
-                    writeText("--$boundary\\r\\n")
-                    writeText("Content-Disposition: form-data; name=\\"prompt\\"\\r\\n\\r\\n")
-                    writeText("$prompt\\r\\n")
+                    writeText("--$boundary\r\n")
+                    writeText("Content-Disposition: form-data; name=\"prompt\"\r\n\r\n")
+                    writeText("$prompt\r\n")
 
-                    writeText("--$boundary\\r\\n")
-                    writeText("Content-Disposition: form-data; name=\\"image\\"; filename=\\"$fileName\\"\\r\\n")
-                    writeText("Content-Type: $mimeType\\r\\n\\r\\n")
+                    writeText("--$boundary\r\n")
+                    writeText("Content-Disposition: form-data; name=\"image\"; filename=\"$fileName\"\r\n")
+                    writeText("Content-Type: $mimeType\r\n\r\n")
                     output.write(bytes)
-                    writeText("\\r\\n--$boundary--\\r\\n")
+                    writeText("\r\n--$boundary--\r\n")
                     output.flush()
                 }
 
@@ -1692,7 +1692,7 @@ class MainActivity : Activity() {
                 resultBitmap = BitmapFactory.decodeByteArray(responseBytes, 0, responseBytes.size)
                     ?: throw Exception("The cloud service returned an invalid image.")
 
-                val completed = resultBitmap
+                val completed = resultBitmap ?: throw Exception("The cloud service returned an invalid image.")
                 resultBitmap = null
 
                 runOnUiThread {
