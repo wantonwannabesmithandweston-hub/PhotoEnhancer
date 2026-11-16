@@ -109,7 +109,7 @@ async def enhance(
 
         client = Client(
             HF_SPACE,
-            token=token,
+            hf_token=token,
             max_workers=1,
             verbose=False,
             analytics_enabled=False
