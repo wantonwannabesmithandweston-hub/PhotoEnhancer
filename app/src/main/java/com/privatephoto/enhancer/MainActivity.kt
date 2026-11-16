@@ -1151,7 +1151,7 @@ class MainActivity : Activity() {
         executor.execute {
             var aiBitmap: Bitmap? = null
             var finalBitmap: Bitmap? = null
-            var detectedFaceCount = 0
+            var restoredFaceCount = 0
 
             try {
                 val bytes = readPhotoBytes(uri)
@@ -1213,7 +1213,7 @@ class MainActivity : Activity() {
                             val faceResult = GfpganFaceRestorer.restore(
                                 applicationContext, base, source, strength
                             ) { completed, total ->
-                                detectedFaceCount = total
+                                restoredFaceCount = completed
                                 runOnUiThread {
                                     if (!isFinishing && !isDestroyed) {
                                         statusText.text = if (total == 0) "No faces detected; finishing photo enhancement..." else "Restoring face $completed of $total..."
@@ -1270,10 +1270,10 @@ class MainActivity : Activity() {
                     isProcessing = false
                     setControlsEnabled(true)
 
-                    statusText.text = if (isFaceRestoreEnabled && detectedFaceCount > 0) {
-                        "Complete! 4× AI upscale + GFPGAN restored $detectedFaceCount face(s) • $mode • $strength strength."
+                    statusText.text = if (isFaceRestoreEnabled && restoredFaceCount > 0) {
+                        "Complete! 4× AI upscale + GFPGAN restored $restoredFaceCount face(s) • $mode • $strength strength."
                     } else if (isFaceRestoreEnabled) {
-                        "Complete! 4× AI upscale. No detectable face landmarks were found, so face restoration was skipped."
+                        "Complete! 4× AI upscale. No face could be aligned for restoration; standard photo enhancement is complete."
                     } else {
                         "Complete! 4× AI upscale • $mode • $strength strength."
                     }
