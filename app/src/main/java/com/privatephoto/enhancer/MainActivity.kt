@@ -462,13 +462,14 @@ class MainActivity : Activity() {
             val outputName = activeSession.outputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no output")
 
-            inputTensor = OnnxTensor.createTensor(
+            val activeInput = OnnxTensor.createTensor(
                 environment,
                 FloatBuffer.wrap(FloatArray(INPUT_ELEMENTS) { 0.5f }),
                 longArrayOf(1, 3, TILE_SIZE.toLong(), TILE_SIZE.toLong())
             )
+            inputTensor = activeInput
 
-            activeSession.run(mapOf(inputName to inputTensor)).use { results ->
+            activeSession.run(mapOf(inputName to activeInput)).use { results ->
                 val output = results.get(outputName) as? OnnxTensor
                     ?: throw Exception("High-detail model output is not a tensor")
                 val values = output.floatBuffer
