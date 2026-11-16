@@ -15,6 +15,10 @@ object GfpganModelDownloader {
         val destination = File(context.filesDir, "gfpgan_fp16.tflite")
         if (destination.exists() && destination.length() >= MIN_MODEL_BYTES) return destination
 
+        if (context.filesDir.usableSpace < MIN_MODEL_BYTES + 50_000_000L) {
+            throw IllegalStateException("Not enough free phone storage. Please free at least 450 MB and try again.")
+        }
+
         val partial = File(context.filesDir, "gfpgan_fp16.tflite.part")
         if (partial.exists()) partial.delete()
 
