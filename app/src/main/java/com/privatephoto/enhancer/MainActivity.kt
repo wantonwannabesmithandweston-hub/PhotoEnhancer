@@ -3,8 +3,6 @@ package com.privatephoto.enhancer
 
 import android.app.Activity
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.content.Intent
 import android.content.ContentValues
 import android.graphics.Bitmap
@@ -55,7 +53,6 @@ class MainActivity : Activity() {
     private lateinit var modeText: TextView
     private lateinit var statusText: TextView
     private lateinit var enhanceButton: Button
-    private lateinit var cloudEnhanceButton: Button
     private lateinit var saveButton: Button
     private lateinit var uploadButton: Button
     private lateinit var testAiButton: Button
@@ -76,22 +73,6 @@ class MainActivity : Activity() {
     private val SAVE_DOCUMENT = 101
 
     private var isProcessing = false
-    private val cloudEtaHandler = Handler(Looper.getMainLooper())
-    private var cloudStartedAtMs = 0L
-    private val cloudEtaTicker = object : Runnable {
-        override fun run() {
-            if (!isProcessing || cloudStartedAtMs <= 0L) return
-            val elapsed = ((System.currentTimeMillis() - cloudStartedAtMs) / 1000L).coerceAtLeast(0L)
-            val remaining = 180L - elapsed
-            val elapsedLabel = formatEtaTime(elapsed)
-            statusText.text = if (remaining > 0L) {
-                "Enhancing photo in the background... Estimated time remaining: about " + formatEtaTime(remaining) + ". Elapsed: " + elapsedLabel + ". You can safely leave the app."
-            } else {
-                "Enhancement is taking longer than the 3-minute estimate. Elapsed: " + elapsedLabel + ". It is still running in the background."
-            }
-            cloudEtaHandler.postDelayed(this, 15_000L)
-        }
-    }
     private var isSaving = false
     private var isModelTesting = false
     private var isDownloadingPhotoModel = false
@@ -107,9 +88,6 @@ class MainActivity : Activity() {
         private const val PHOTO_MODEL_BYTES = 33_724_311L
         private const val PHOTO_MODEL_SHA256 =
             "29fbb9bc95708f9f63966804a389be77fe060dbdda882402bd1592a10908d364"
-
-        private const val SERVER = "https://photoenhancer.onrender.com"
-        private const val MAX_CLOUD_UPLOAD_SIZE = 20 * 1024 * 1024
 
         private const val TILE_SIZE = 128
         private const val OUTPUT_TILE_SIZE = 512
@@ -149,7 +127,7 @@ class MainActivity : Activity() {
         layout.addView(title)
 
         val subtitle = TextView(this).apply {
-            text = "Offline AI + Optional Free Cloud Restoration"
+            text = "Offline AI Enhancement • Photos stay on your phone"
             textSize = 14f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
@@ -315,19 +293,14 @@ class MainActivity : Activity() {
         }
         layout.addView(enhanceButton)
 
-        cloudEnhanceButton = Button(this).apply {
-            text = "Enhance with Free Cloud AI"
-        }
-        layout.addView(cloudEnhanceButton)
-
-        val cloudPrivacyNote = TextView(this).apply {
-            text = "Cloud mode sends this photo to Render and Hugging Face for restoration. Custom instructions apply to Offline Enhance only."
+        val privacyNote = TextView(this).apply {
+            text = "Your photos are processed on this phone. Internet is used only to download the optional AI model."
             textSize = 12f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
             setPadding(dp(8), dp(4), dp(8), dp(8))
         }
-        layout.addView(cloudPrivacyNote)
+        layout.addView(privacyNote)
 
         statusText = TextView(this).apply {
             textSize = 16f
@@ -374,15 +347,6 @@ class MainActivity : Activity() {
             }
         }
 
-        cloudEnhanceButton.setOnClickListener {
-            val uri = selectedImage
-            if (uri == null) {
-                Toast.makeText(this, "Please upload a photo first", Toast.LENGTH_SHORT).show()
-            } else if (!isProcessing && !isSaving && !isModelTesting) {
-                enhancePhotoWithCloud(uri)
-            }
-        }
-
         saveButton.setOnClickListener {
             if (!isProcessing && !isSaving && !isModelTesting) {
                 saveEnhancedPhoto()
@@ -396,12 +360,10 @@ class MainActivity : Activity() {
         updateModeButtons()
         updatePhotoModelButton()
         statusText.text = "Upload a photo to get started"
-        observeCloudEnhancement()
     }
 
     private fun setControlsEnabled(enabled: Boolean) {
         enhanceButton.isEnabled = enabled
-        cloudEnhanceButton.isEnabled = enabled
         uploadButton.isEnabled = enabled
         testAiButton.isEnabled = enabled
         downloadModelButton.isEnabled =
@@ -1099,15 +1061,46 @@ class MainActivity : Activity() {
     ): Bitmap {
         val environment = OrtEnvironment.getEnvironment()
         environment.setTelemetry(false)
-        val options = OrtSession.SessionOptions()
+        var options: OrtSession.SessionOptions? = null
         var session: OrtSession? = null
         var destination: Bitmap? = null
 
         try {
-            val activeSession = environment.createSession(
-                photoQualityModelFile.absolutePath,
-                options
-            )
+            val activeSession = try {
+                val acceleratedOptions = OrtSession.SessionOptions()
+                try {
+                    val xnnpackThreads = Runtime.getRuntime()
+                        .availableProcessors()
+                        .coerceAtMost(4)
+                        .coerceAtLeast(1)
+                    acceleratedOptions.setIntraOpNumThreads(1)
+                    acceleratedOptions.addXnnpack(
+                        mapOf("intra_op_num_threads" to xnnpackThreads.toString())
+                    )
+                    val acceleratedSession = environment.createSession(
+                        photoQualityModelFile.absolutePath,
+                        acceleratedOptions
+                    )
+                    options = acceleratedOptions
+                    acceleratedSession
+                } catch (acceleratorError: Exception) {
+                    try { acceleratedOptions.close() } catch (_: Exception) {}
+                    val cpuOptions = OrtSession.SessionOptions()
+                    try {
+                        val cpuSession = environment.createSession(
+                            photoQualityModelFile.absolutePath,
+                            cpuOptions
+                        )
+                        options = cpuOptions
+                        cpuSession
+                    } catch (cpuError: Exception) {
+                        try { cpuOptions.close() } catch (_: Exception) {}
+                        throw cpuError
+                    }
+                }
+            } catch (e: Exception) {
+                throw Exception("Could not start the high-detail AI model: ${e.message}", e)
+            }
             session = activeSession
             val inputName = activeSession.inputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no input")
@@ -1258,7 +1251,7 @@ class MainActivity : Activity() {
             throw e
         } finally {
             try { session?.close() } catch (_: Exception) {}
-            try { options.close() } catch (_: Exception) {}
+            try { options?.close() } catch (_: Exception) {}
         }
     }
 
@@ -1608,7 +1601,7 @@ class MainActivity : Activity() {
                     setControlsEnabled(true)
 
                     statusText.text =
-                        "Complete! 4× AI upscale • $mode • $strength strength."
+                        "Complete! 4× on-device AI upscale • $mode • $strength strength."
 
                     Toast.makeText(
                         this,
@@ -1643,141 +1636,6 @@ class MainActivity : Activity() {
                 }
             }
         }
-    }
-
-    private fun formatEtaTime(seconds: Long): String {
-        val minutes = seconds / 60L
-        val remainder = seconds % 60L
-        return if (minutes > 0L) minutes.toString() + "m " + remainder + "s" else remainder.toString() + "s"
-    }
-
-    private fun startCloudEta(startedAt: Long) {
-        cloudEtaHandler.removeCallbacks(cloudEtaTicker)
-        cloudStartedAtMs = if (startedAt > 0L) startedAt else System.currentTimeMillis()
-        cloudEtaTicker.run()
-    }
-
-    private fun stopCloudEta() {
-        cloudEtaHandler.removeCallbacks(cloudEtaTicker)
-        cloudStartedAtMs = 0L
-    }
-
-    private fun enhancePhotoWithCloud(uri: Uri) {
-        if (isProcessing || isSaving || isModelTesting) return
-        isProcessing = true
-        setControlsEnabled(false)
-        statusText.text = "Queuing background cloud restoration..."
-
-        try {
-            // Pass the persisted picker URI directly to WorkManager. The Activity's
-            // executor is shut down in onDestroy(), so preparing the upload there
-            // could be interrupted as soon as the user leaves the screen.
-            val input = androidx.work.workDataOf(
-                CloudEnhancementWorker.KEY_INPUT_URI to uri.toString(),
-                CloudEnhancementWorker.KEY_STRENGTH to selectedStrength,
-                CloudEnhancementWorker.KEY_MIME_TYPE to (contentResolver.getType(uri) ?: "image/jpeg")
-            )
-            val request = androidx.work.OneTimeWorkRequestBuilder<CloudEnhancementWorker>()
-                .setInputData(input)
-                // Ask Android to start this user-initiated task promptly. If the
-                // expedited quota is exhausted, WorkManager safely falls back to
-                // a regular job; the worker then promotes itself to a foreground service.
-                .setExpedited(androidx.work.OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-                // Do not gate this job on WorkManager's network validator.
-                // Some Samsung/Android network states can leave CONNECTED work ENQUEUED
-                // even while Wi-Fi works. The worker handles network errors and retries.
-                .setBackoffCriteria(
-                    androidx.work.BackoffPolicy.EXPONENTIAL,
-                    30,
-                    java.util.concurrent.TimeUnit.SECONDS
-                )
-                .build()
-            androidx.work.WorkManager.getInstance(applicationContext)
-                .enqueueUniqueWork(
-                    CloudEnhancementWorker.UNIQUE_WORK_NAME,
-                    androidx.work.ExistingWorkPolicy.REPLACE,
-                    request
-                )
-            statusText.text = "Cloud enhancement queued. It will continue if you leave the app."
-        } catch (e: Exception) {
-            isProcessing = false
-            setControlsEnabled(true)
-            statusText.text = "Could not start cloud enhancement: ${e.message}"
-        }
-    }
-
-    private var cloudWorkLiveData: androidx.lifecycle.LiveData<List<androidx.work.WorkInfo>>? = null
-    private var cloudWorkObserver: androidx.lifecycle.Observer<List<androidx.work.WorkInfo>>? = null
-
-    private fun observeCloudEnhancement() {
-        val liveData = androidx.work.WorkManager.getInstance(applicationContext)
-            .getWorkInfosForUniqueWorkLiveData(CloudEnhancementWorker.UNIQUE_WORK_NAME)
-        cloudWorkLiveData = liveData
-        val observer = androidx.lifecycle.Observer<List<androidx.work.WorkInfo>> { infos ->
-            val info = infos?.firstOrNull() ?: return@Observer
-            when (info.state) {
-                androidx.work.WorkInfo.State.ENQUEUED -> {
-                    isProcessing = true
-                    setControlsEnabled(false)
-                    statusText.text = "Cloud enhancement queued. It will continue in the background..."
-                }
-                androidx.work.WorkInfo.State.RUNNING -> {
-                    isProcessing = true
-                    setControlsEnabled(false)
-                    val startedAt = info.progress.getLong(CloudEnhancementWorker.KEY_STARTED_AT, 0L)
-                    startCloudEta(startedAt)
-                }
-                androidx.work.WorkInfo.State.SUCCEEDED -> {
-                    stopCloudEta()
-                    isProcessing = false
-                    setControlsEnabled(true)
-                    val resultUri = info.outputData.getString(CloudEnhancementWorker.KEY_OUTPUT_URI)
-                    if (resultUri.isNullOrBlank()) {
-                        statusText.text = "The cloud job finished but did not return a saved photo. Please try again."
-                    } else {
-                        try {
-                            val bitmap = contentResolver.openInputStream(Uri.parse(resultUri))?.use { stream ->
-                                BitmapFactory.decodeStream(stream)
-                            }
-                            if (bitmap != null) {
-                                enhancedBitmap?.takeIf { !it.isRecycled }?.recycle()
-                                enhancedBitmap = bitmap
-                                photoView.setImageBitmap(bitmap)
-                                isShowingEnhanced = true
-                                compareButton.text = "View Original Photo"
-                                statusText.text = "Enhancement complete. Saved to Pictures/Private Photo Enhancer."
-                                setControlsEnabled(true)
-                                Toast.makeText(this, "Enhanced photo saved to your Gallery!", Toast.LENGTH_LONG).show()
-                            } else {
-                                statusText.text = "The photo was saved, but could not be previewed. Check Pictures/Private Photo Enhancer."
-                            }
-                        } catch (e: Exception) {
-                            statusText.text = "The photo was saved, but preview failed: ${e.message}"
-                        }
-                    }
-                }
-                androidx.work.WorkInfo.State.FAILED -> {
-                    stopCloudEta()
-                    isProcessing = false
-                    setControlsEnabled(true)
-                    val detail = info.outputData.getString(CloudEnhancementWorker.KEY_ERROR)
-                        ?: "The background job stopped without an error message."
-                    statusText.text = "Cloud enhancement failed: $detail"
-                    Toast.makeText(this, "Cloud enhancement failed. Open the app to see the error.", Toast.LENGTH_LONG).show()
-                }
-                androidx.work.WorkInfo.State.CANCELLED -> {
-                    stopCloudEta()
-                    isProcessing = false
-                    setControlsEnabled(true)
-                    statusText.text = "Cloud enhancement was cancelled before the photo was saved."
-                }
-                androidx.work.WorkInfo.State.BLOCKED -> {
-                    statusText.text = "Cloud enhancement is waiting for another job to finish..."
-                }
-            }
-        }
-        cloudWorkObserver = observer
-        liveData.observeForever(observer)
     }
 
     private fun saveEnhancedPhoto() {
@@ -2004,10 +1862,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        cloudWorkObserver?.let { observer -> cloudWorkLiveData?.removeObserver(observer) }
-        cloudWorkObserver = null
-        cloudWorkLiveData = null
-        stopCloudEta()
         executor.shutdownNow()
 
         if (::photoView.isInitialized) {
