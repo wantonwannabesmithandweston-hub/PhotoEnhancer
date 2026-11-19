@@ -12,6 +12,7 @@ import android.graphics.Matrix
 import android.graphics.RectF
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.Gravity
@@ -1547,12 +1548,50 @@ class MainActivity : Activity() {
                         }
                     }
 
+                    // Estimate the remaining time from completed tile intervals.
+                    // The first tile is excluded because model/session startup can be slow.
+                    var firstTileCompletedAt: Long? = null
+
                     aiBitmap = runActiveRealEsrgan(source, strength) {
                         completed, total ->
+                        val now = SystemClock.elapsedRealtime()
+                        if (completed == 1) {
+                            firstTileCompletedAt = now
+                        }
+
+                        val remainingTiles = (total - completed).coerceAtLeast(0)
+                        val firstTileTime = firstTileCompletedAt
+                        val etaText = if (
+                            completed > 1 &&
+                            remainingTiles > 0 &&
+                            firstTileTime != null
+                        ) {
+                            val averageTileMillis =
+                                (now - firstTileTime).toDouble() / (completed - 1)
+                            val remainingSeconds = (
+                                averageTileMillis * remainingTiles / 1000.0
+                            ).roundToInt().coerceAtLeast(1)
+                            val minutes = remainingSeconds / 60
+                            val seconds = remainingSeconds % 60
+                            if (minutes > 0) {
+                                " • about ${minutes}m ${seconds}s remaining"
+                            } else {
+                                " • about ${seconds}s remaining"
+                            }
+                        } else {
+                            ""
+                        }
+
+                        val percent = if (total > 0) {
+                            completed * 100 / total
+                        } else {
+                            0
+                        }
+
                         runOnUiThread {
                             if (!isFinishing && !isDestroyed) {
                                 statusText.text =
-                                    "AI processing tile $completed of $total..."
+                                    "AI processing: $completed/$total tiles ($percent%)$etaText"
                             }
                         }
                     }
