@@ -77,8 +77,8 @@ class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
 
     private var observedWorkId: UUID? = null
-    private var observedWorkLiveData: LiveData<WorkInfo>? = null
-    private var observedWorkObserver: Observer<WorkInfo>? = null
+    private var observedWorkLiveData: LiveData<WorkInfo?>? = null
+    private var observedWorkObserver: Observer<WorkInfo?>? = null
     private var completedWorkId: UUID? = null
 
     private val PICK_IMAGE = 100
@@ -115,6 +115,10 @@ class MainActivity : Activity() {
         private const val MAX_INPUT_DIMENSION = 768
         private const val WORK_PREFERENCES = "photo_enhancer_work"
         private const val PREF_LAST_WORK_ID = "last_enhancement_work_id"
+        private const val PREF_IMAGE_URI = "last_image_uri"
+        private const val PREF_STRENGTH = "last_strength"
+        private const val PREF_MODE = "last_mode"
+        private const val PREF_INSTRUCTIONS = "last_instructions"
     }
 
     private fun dp(value: Int): Int =
@@ -762,6 +766,13 @@ class MainActivity : Activity() {
             getSharedPreferences(WORK_PREFERENCES, MODE_PRIVATE)
                 .edit()
                 .putString(PREF_LAST_WORK_ID, request.id.toString())
+                .putString(PREF_IMAGE_URI, uri.toString())
+                .putString(PREF_STRENGTH, selectedStrength)
+                .putString(PREF_MODE, selectedMode)
+                .putString(
+                    PREF_INSTRUCTIONS,
+                    instructionsInput.text.toString().trim().take(2000)
+                )
                 .apply()
 
             WorkManager.getInstance(applicationContext).enqueueUniqueWork(
@@ -775,6 +786,10 @@ class MainActivity : Activity() {
             getSharedPreferences(WORK_PREFERENCES, MODE_PRIVATE)
                 .edit()
                 .remove(PREF_LAST_WORK_ID)
+                .remove(PREF_IMAGE_URI)
+                .remove(PREF_STRENGTH)
+                .remove(PREF_MODE)
+                .remove(PREF_INSTRUCTIONS)
                 .apply()
             isProcessing = false
             setControlsEnabled(true)
@@ -795,6 +810,15 @@ class MainActivity : Activity() {
                 .apply()
             return
         }
+
+        val preferences = getSharedPreferences(WORK_PREFERENCES, MODE_PRIVATE)
+        selectedImage = preferences.getString(PREF_IMAGE_URI, null)?.let(Uri::parse)
+        selectedStrength = preferences.getString(PREF_STRENGTH, "Balanced") ?: "Balanced"
+        selectedMode = preferences.getString(PREF_MODE, "Natural Restore") ?: "Natural Restore"
+        instructionsInput.setText(preferences.getString(PREF_INSTRUCTIONS, "").orEmpty())
+        updateStrengthButtons()
+        updateModeButtons()
+        selectedImage?.let { photoView.setImageURI(it) }
 
         isProcessing = true
         setControlsEnabled(false)
@@ -835,7 +859,7 @@ class MainActivity : Activity() {
 
         val liveData = WorkManager.getInstance(applicationContext)
             .getWorkInfoByIdLiveData(workId)
-        val observer = Observer<WorkInfo> { info ->
+        val observer = Observer<WorkInfo?> { info ->
             if (info != null) handleEnhancementWorkInfo(info)
         }
 
@@ -857,9 +881,11 @@ class MainActivity : Activity() {
     }
 
     private fun handleEnhancementWorkInfo(info: WorkInfo) {
-        val imageUriText = info.inputData.getString(
-            PhotoEnhancementWorker.KEY_IMAGE_URI
-        )
+        val preferences = getSharedPreferences(WORK_PREFERENCES, MODE_PRIVATE)
+        val imageUriText =
+            info.progress.getString(PhotoEnhancementWorker.KEY_IMAGE_URI)
+                ?: info.outputData.getString(PhotoEnhancementWorker.KEY_IMAGE_URI)
+                ?: preferences.getString(PREF_IMAGE_URI, null)
         if (!imageUriText.isNullOrBlank() &&
             selectedImage?.toString() != imageUriText
         ) {
@@ -944,16 +970,16 @@ class MainActivity : Activity() {
                 }
                 enhancedBitmap = restoredBitmap
 
-                selectedStrength = info.inputData.getString(
+                selectedStrength = info.outputData.getString(
                     PhotoEnhancementWorker.KEY_STRENGTH
-                ) ?: "Balanced"
-                selectedMode = info.inputData.getString(
+                ) ?: preferences.getString(PREF_STRENGTH, "Balanced") ?: "Balanced"
+                selectedMode = info.outputData.getString(
                     PhotoEnhancementWorker.KEY_MODE
-                ) ?: "Natural Restore"
+                ) ?: preferences.getString(PREF_MODE, "Natural Restore") ?: "Natural Restore"
                 instructionsInput.setText(
-                    info.inputData.getString(
+                    info.outputData.getString(
                         PhotoEnhancementWorker.KEY_INSTRUCTIONS
-                    ).orEmpty()
+                    ) ?: preferences.getString(PREF_INSTRUCTIONS, "").orEmpty()
                 )
 
                 updateStrengthButtons()
