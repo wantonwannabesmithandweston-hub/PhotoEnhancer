@@ -74,7 +74,11 @@ class PhotoEnhancementWorker(
             setProgress(
                 workDataOf(
                     KEY_STAGE to "Preparing photo",
-                    KEY_PERCENT to 0
+                    KEY_PERCENT to 0,
+                    KEY_IMAGE_URI to imageUriText,
+                    KEY_STRENGTH to strength,
+                    KEY_MODE to mode,
+                    KEY_INSTRUCTIONS to instructions
                 )
             )
 
@@ -166,7 +170,13 @@ class PhotoEnhancementWorker(
             )
 
             Result.success(
-                workDataOf(KEY_OUTPUT_PATH to outputFile.absolutePath)
+                workDataOf(
+                    KEY_OUTPUT_PATH to outputFile.absolutePath,
+                    KEY_IMAGE_URI to imageUriText,
+                    KEY_STRENGTH to strength,
+                    KEY_MODE to mode,
+                    KEY_INSTRUCTIONS to instructions
+                )
             )
 
         } catch (cancelled: CancellationException) {
