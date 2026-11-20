@@ -78,7 +78,8 @@ class PhotoEnhancementWorker(
                 )
             )
 
-            source = decodeSource(Uri.parse(imageUriText))
+            val decodedSource = decodeSource(Uri.parse(imageUriText))
+            source = decodedSource
             if (isStopped) throw CancellationException("Enhancement was cancelled.")
 
             setProgress(
@@ -91,8 +92,8 @@ class PhotoEnhancementWorker(
             var firstTileCompletedAt: Long? = null
             var lastProgressUpdateAt = 0L
 
-            enhanced = PhotoEnhancementEngine(applicationContext).enhance(
-                source = source,
+            val processedBitmap = PhotoEnhancementEngine(applicationContext).enhance(
+                source = decodedSource,
                 strength = strength,
                 mode = mode,
                 instructions = instructions
@@ -133,6 +134,7 @@ class PhotoEnhancementWorker(
                 }
             }
 
+            enhanced = processedBitmap
             if (isStopped) throw CancellationException("Enhancement was cancelled.")
 
             setProgress(
@@ -152,7 +154,7 @@ class PhotoEnhancementWorker(
             }
 
             val saved = outputFile.outputStream().buffered().use { output ->
-                enhanced.compress(Bitmap.CompressFormat.JPEG, 95, output)
+                processedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)
             }
             if (!saved) throw IllegalStateException("Could not save the enhanced image.")
 
