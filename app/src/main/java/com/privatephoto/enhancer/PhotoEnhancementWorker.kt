@@ -196,14 +196,17 @@ class PhotoEnhancementWorker(
     }
 
     private fun decodeSource(uri: Uri): Bitmap {
-        val bytes = applicationContext.contentResolver.openInputStream(uri)
-            ?.use { it.readBytes() }
-            ?: throw IllegalStateException("Could not open the selected photo.")
+        val resolver = applicationContext.contentResolver
 
+        // Read image dimensions without loading the compressed photo into a
+        // large byte array. The stream is reopened for the actual decode.
         val bounds = BitmapFactory.Options().apply {
             inJustDecodeBounds = true
         }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+
+        resolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, bounds)
+        } ?: throw IllegalStateException("Could not open the selected photo.")
 
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
             throw IllegalArgumentException("The selected photo is not a valid image.")
@@ -222,12 +225,9 @@ class PhotoEnhancementWorker(
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
 
-        return BitmapFactory.decodeByteArray(
-            bytes,
-            0,
-            bytes.size,
-            decodeOptions
-        ) ?: throw IllegalStateException("Android could not decode the selected photo.")
+        return resolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, decodeOptions)
+        } ?: throw IllegalStateException("Android could not decode the selected photo.")
     }
 
     private fun createForegroundInfo(message: String): ForegroundInfo {
