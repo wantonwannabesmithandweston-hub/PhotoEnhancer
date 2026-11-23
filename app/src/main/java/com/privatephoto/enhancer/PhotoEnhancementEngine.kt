@@ -3,6 +3,7 @@ package com.privatephoto.enhancer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.os.Build
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -397,41 +398,62 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         var destination: Bitmap? = null
 
         try {
-            val activeSession = try {
-                val acceleratedOptions = OrtSession.SessionOptions()
-                try {
-                    val xnnpackThreads = Runtime.getRuntime()
-                        .availableProcessors()
-                        .coerceAtMost(4)
-                        .coerceAtLeast(1)
-                    acceleratedOptions.setIntraOpNumThreads(1)
-                    acceleratedOptions.addXnnpack(
-                        mapOf("intra_op_num_threads" to xnnpackThreads.toString())
-                    )
-                    val acceleratedSession = environment.createSession(
-                        photoQualityModelFile.absolutePath,
-                        acceleratedOptions
-                    )
-                    options = acceleratedOptions
-                    acceleratedSession
-                } catch (acceleratorError: Exception) {
-                    try { acceleratedOptions.close() } catch (_: Exception) {}
-                    val cpuOptions = OrtSession.SessionOptions()
-                    try {
-                        val cpuSession = environment.createSession(
-                            photoQualityModelFile.absolutePath,
-                            cpuOptions
-                        )
-                        options = cpuOptions
-                        cpuSession
-                    } catch (cpuError: Exception) {
-                        try { cpuOptions.close() } catch (_: Exception) {}
-                        throw cpuError
-                    }
+            val xnnpackThreads = Runtime.getRuntime()
+                .availableProcessors()
+                .coerceAtMost(4)
+                .coerceAtLeast(1)
+
+            // Prefer NNAPI on Android 8.1+ while retaining XNNPACK for
+            // operators the device accelerator cannot execute. If provider
+            // registration or session creation fails, retry with XNNPACK,
+            // then the default CPU execution provider.
+            val providerAttempts = buildList {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    add("NNAPI + XNNPACK")
                 }
-            } catch (e: Exception) {
-                throw Exception("Could not start the high-detail AI model: ${e.message}", e)
+                add("XNNPACK")
+                add("CPU")
             }
+
+            var selectedSession: OrtSession? = null
+            var lastProviderError: Exception? = null
+
+            for (provider in providerAttempts) {
+                val candidateOptions = OrtSession.SessionOptions()
+                try {
+                    candidateOptions.setIntraOpNumThreads(1)
+
+                    when (provider) {
+                        "NNAPI + XNNPACK" -> {
+                            candidateOptions.addNnapi()
+                            candidateOptions.addXnnpack(
+                                mapOf("intra_op_num_threads" to xnnpackThreads.toString())
+                            )
+                        }
+                        "XNNPACK" -> {
+                            candidateOptions.addXnnpack(
+                                mapOf("intra_op_num_threads" to xnnpackThreads.toString())
+                            )
+                        }
+                        // CPU is ONNX Runtime's default provider.
+                    }
+
+                    selectedSession = environment.createSession(
+                        photoQualityModelFile.absolutePath,
+                        candidateOptions
+                    )
+                    options = candidateOptions
+                    break
+                } catch (providerError: Exception) {
+                    try { candidateOptions.close() } catch (_: Exception) {}
+                    lastProviderError = providerError
+                }
+            }
+
+            val activeSession = selectedSession ?: throw Exception(
+                "Could not start the high-detail AI model: ${lastProviderError?.message}",
+                lastProviderError
+            )
             session = activeSession
             val inputName = activeSession.inputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no input")
