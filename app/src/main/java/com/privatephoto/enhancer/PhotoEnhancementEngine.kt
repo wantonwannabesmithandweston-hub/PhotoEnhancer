@@ -3,7 +3,6 @@ package com.privatephoto.enhancer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.os.Build
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -12,6 +11,7 @@ import com.google.ai.edge.litert.CompiledModel
 import com.google.ai.edge.litert.Environment as LiteRtEnvironment
 import com.google.ai.edge.litert.TensorBuffer
 import com.google.android.gms.litert.LiteRt
+import com.google.android.gms.litert.client.LiteRtInitializationOptions
 import com.google.android.gms.tasks.Tasks
 import java.io.File
 import java.nio.FloatBuffer
@@ -398,62 +398,41 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         var destination: Bitmap? = null
 
         try {
-            val xnnpackThreads = Runtime.getRuntime()
-                .availableProcessors()
-                .coerceAtMost(4)
-                .coerceAtLeast(1)
-
-            // Prefer NNAPI on Android 8.1+ while retaining XNNPACK for
-            // operators the device accelerator cannot execute. If provider
-            // registration or session creation fails, retry with XNNPACK,
-            // then the default CPU execution provider.
-            val providerAttempts = buildList {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                    add("NNAPI + XNNPACK")
-                }
-                add("XNNPACK")
-                add("CPU")
-            }
-
-            var selectedSession: OrtSession? = null
-            var lastProviderError: Exception? = null
-
-            for (provider in providerAttempts) {
-                val candidateOptions = OrtSession.SessionOptions()
+            val activeSession = try {
+                val acceleratedOptions = OrtSession.SessionOptions()
                 try {
-                    candidateOptions.setIntraOpNumThreads(1)
-
-                    when (provider) {
-                        "NNAPI + XNNPACK" -> {
-                            candidateOptions.addNnapi()
-                            candidateOptions.addXnnpack(
-                                mapOf("intra_op_num_threads" to xnnpackThreads.toString())
-                            )
-                        }
-                        "XNNPACK" -> {
-                            candidateOptions.addXnnpack(
-                                mapOf("intra_op_num_threads" to xnnpackThreads.toString())
-                            )
-                        }
-                        // CPU is ONNX Runtime's default provider.
-                    }
-
-                    selectedSession = environment.createSession(
-                        photoQualityModelFile.absolutePath,
-                        candidateOptions
+                    val xnnpackThreads = Runtime.getRuntime()
+                        .availableProcessors()
+                        .coerceAtMost(4)
+                        .coerceAtLeast(1)
+                    acceleratedOptions.setIntraOpNumThreads(1)
+                    acceleratedOptions.addXnnpack(
+                        mapOf("intra_op_num_threads" to xnnpackThreads.toString())
                     )
-                    options = candidateOptions
-                    break
-                } catch (providerError: Exception) {
-                    try { candidateOptions.close() } catch (_: Exception) {}
-                    lastProviderError = providerError
+                    val acceleratedSession = environment.createSession(
+                        photoQualityModelFile.absolutePath,
+                        acceleratedOptions
+                    )
+                    options = acceleratedOptions
+                    acceleratedSession
+                } catch (acceleratorError: Exception) {
+                    try { acceleratedOptions.close() } catch (_: Exception) {}
+                    val cpuOptions = OrtSession.SessionOptions()
+                    try {
+                        val cpuSession = environment.createSession(
+                            photoQualityModelFile.absolutePath,
+                            cpuOptions
+                        )
+                        options = cpuOptions
+                        cpuSession
+                    } catch (cpuError: Exception) {
+                        try { cpuOptions.close() } catch (_: Exception) {}
+                        throw cpuError
+                    }
                 }
+            } catch (e: Exception) {
+                throw Exception("Could not start the high-detail AI model: ${e.message}", e)
             }
-
-            val activeSession = selectedSession ?: throw Exception(
-                "Could not start the high-detail AI model: ${lastProviderError?.message}",
-                lastProviderError
-            )
             session = activeSession
             val inputName = activeSession.inputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no input")
@@ -623,26 +602,63 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         var resultBitmap: Bitmap? = null
 
         try {
-            environment = Tasks.await(
-                LiteRt.initialize(appContext)
-            )
+            val gpuInitializationOptions =
+                LiteRtInitializationOptions.builder()
+                    .setEnableGpu(true)
+                    .build()
 
-            model = CompiledModel.create(
-                appContext.assets,
-                modelFile,
-                CompiledModel.Options(Accelerator.CPU),
-                environment
-            )
+            // Request LiteRT's on-device GPU accelerator. If GPU initialization
+            // is unavailable, continue with a normal CPU environment.
+            environment = try {
+                Tasks.await(
+                    LiteRt.initialize(appContext, gpuInitializationOptions)
+                )
+            } catch (_: Exception) {
+                Tasks.await(LiteRt.initialize(appContext))
+            }
 
-            inputBuffers = model.createInputBuffers()
-            outputBuffers = model.createOutputBuffers()
+            val activeEnvironment = environment
+                ?: throw Exception("Could not initialize the on-device AI runtime.")
+
+            var useGpu = activeEnvironment
+                .getAvailableAccelerators()
+                .contains(Accelerator.GPU)
+
+            model = try {
+                if (useGpu) {
+                    CompiledModel.create(
+                        appContext.assets,
+                        modelFile,
+                        CompiledModel.Options(Accelerator.GPU, Accelerator.CPU),
+                        activeEnvironment
+                    )
+                } else {
+                    CompiledModel.create(
+                        appContext.assets,
+                        modelFile,
+                        CompiledModel.Options(Accelerator.CPU),
+                        activeEnvironment
+                    )
+                }
+            } catch (_: Exception) {
+                useGpu = false
+                CompiledModel.create(
+                    appContext.assets,
+                    modelFile,
+                    CompiledModel.Options(Accelerator.CPU),
+                    activeEnvironment
+                )
+            }
+
+            inputBuffers = model!!.createInputBuffers()
+            outputBuffers = model!!.createOutputBuffers()
 
             if (inputBuffers.size != 1 || outputBuffers.size != 1) {
                 throw Exception("Unexpected AI model tensor count")
             }
 
-            val inputBuffer = inputBuffers[0]
-            val outputBuffer = outputBuffers[0]
+            var inputBuffer = inputBuffers[0]
+            var outputBuffer = outputBuffers[0]
 
             val width = source.width
             val height = source.height
@@ -731,10 +747,39 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                         }
                     }
 
-                    inputBuffer.writeFloat(inputData)
-                    model.run(inputBuffers, outputBuffers)
+                    val aiOutput = try {
+                        inputBuffer.writeFloat(inputData)
+                        model!!.run(inputBuffers, outputBuffers)
+                        outputBuffer.readFloat()
+                    } catch (gpuInferenceError: Exception) {
+                        if (!useGpu) throw gpuInferenceError
 
-                    val aiOutput = outputBuffer.readFloat()
+                        // A GPU driver can fail after the model compiles. Close
+                        // its resources and retry the current tile on the CPU.
+                        inputBuffers.forEach {
+                            try { it.close() } catch (_: Exception) {}
+                        }
+                        outputBuffers.forEach {
+                            try { it.close() } catch (_: Exception) {}
+                        }
+                        try { model?.close() } catch (_: Exception) {}
+
+                        model = CompiledModel.create(
+                            appContext.assets,
+                            modelFile,
+                            CompiledModel.Options(Accelerator.CPU),
+                            activeEnvironment
+                        )
+                        inputBuffers = model!!.createInputBuffers()
+                        outputBuffers = model!!.createOutputBuffers()
+                        inputBuffer = inputBuffers[0]
+                        outputBuffer = outputBuffers[0]
+                        useGpu = false
+
+                        inputBuffer.writeFloat(inputData)
+                        model!!.run(inputBuffers, outputBuffers)
+                        outputBuffer.readFloat()
+                    }
 
                     if (aiOutput.size != OUTPUT_ELEMENTS) {
                         throw Exception("Unexpected AI output size")
