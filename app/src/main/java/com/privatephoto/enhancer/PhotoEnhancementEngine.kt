@@ -620,28 +620,20 @@ class PhotoEnhancementEngine(private val appContext: Context) {
             val activeEnvironment = environment
                 ?: throw Exception("Could not initialize the on-device AI runtime.")
 
-            var useGpu = activeEnvironment
-                .getAvailableAccelerators()
-                .contains(Accelerator.GPU)
-
+            // Do not query Environment.getAvailableAccelerators(): some older
+            // Google Play services LiteRT modules have a native crash in that
+            // method. Try GPU with CPU fallback directly, as the official API
+            // recommends. If GPU model creation fails, explicitly create CPU.
+            var gpuWasRequested = true
             model = try {
-                if (useGpu) {
-                    CompiledModel.create(
-                        appContext.assets,
-                        modelFile,
-                        CompiledModel.Options(Accelerator.GPU, Accelerator.CPU),
-                        activeEnvironment
-                    )
-                } else {
-                    CompiledModel.create(
-                        appContext.assets,
-                        modelFile,
-                        CompiledModel.Options(Accelerator.CPU),
-                        activeEnvironment
-                    )
-                }
+                CompiledModel.create(
+                    appContext.assets,
+                    modelFile,
+                    CompiledModel.Options(Accelerator.GPU, Accelerator.CPU),
+                    activeEnvironment
+                )
             } catch (_: Exception) {
-                useGpu = false
+                gpuWasRequested = false
                 CompiledModel.create(
                     appContext.assets,
                     modelFile,
@@ -752,7 +744,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                         model!!.run(inputBuffers, outputBuffers)
                         outputBuffer.readFloat()
                     } catch (gpuInferenceError: Exception) {
-                        if (!useGpu) throw gpuInferenceError
+                        if (!gpuWasRequested) throw gpuInferenceError
 
                         // A GPU driver can fail after the model compiles. Close
                         // its resources and retry the current tile on the CPU.
@@ -774,7 +766,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                         outputBuffers = model!!.createOutputBuffers()
                         inputBuffer = inputBuffers[0]
                         outputBuffer = outputBuffers[0]
-                        useGpu = false
+                        gpuWasRequested = false
 
                         inputBuffer.writeFloat(inputData)
                         model!!.run(inputBuffers, outputBuffers)
