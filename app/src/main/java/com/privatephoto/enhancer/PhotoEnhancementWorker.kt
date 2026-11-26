@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
@@ -198,6 +200,19 @@ class PhotoEnhancementWorker(
     private fun decodeSource(uri: Uri): Bitmap {
         val resolver = applicationContext.contentResolver
 
+        // Read EXIF orientation from a separate stream. BitmapFactory does not
+        // apply JPEG orientation metadata to the decoded pixels.
+        val orientation = try {
+            resolver.openInputStream(uri)?.use { stream ->
+                ExifInterface(stream).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (_: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
+        }
+
         // Read image dimensions without loading the compressed photo into a
         // large byte array. The stream is reopened for the actual decode.
         val bounds = BitmapFactory.Options().apply {
@@ -225,9 +240,62 @@ class PhotoEnhancementWorker(
             inPreferredConfig = Bitmap.Config.ARGB_8888
         }
 
-        return resolver.openInputStream(uri)?.use { stream ->
+        val decoded = resolver.openInputStream(uri)?.use { stream ->
             BitmapFactory.decodeStream(stream, null, decodeOptions)
         } ?: throw IllegalStateException("Android could not decode the selected photo.")
+
+        return applyExifOrientation(decoded, orientation)
+    }
+
+    private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+
+        when (orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> {
+                matrix.setScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_180 -> {
+                matrix.setRotate(180f)
+            }
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> {
+                matrix.setScale(1f, -1f)
+            }
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.setRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_90 -> {
+                matrix.setRotate(90f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.setRotate(-90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_ROTATE_270 -> {
+                matrix.setRotate(-90f)
+            }
+            else -> return bitmap
+        }
+
+        return try {
+            val oriented = Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.width,
+                bitmap.height,
+                matrix,
+                true
+            )
+            if (oriented !== bitmap && !bitmap.isRecycled) {
+                bitmap.recycle()
+            }
+            oriented
+        } catch (_: Exception) {
+            // Preserve the decoded photo if an unusual bitmap cannot be
+            // transformed; enhancement can still proceed without rotation.
+            bitmap
+        }
     }
 
     private fun createForegroundInfo(message: String): ForegroundInfo {
