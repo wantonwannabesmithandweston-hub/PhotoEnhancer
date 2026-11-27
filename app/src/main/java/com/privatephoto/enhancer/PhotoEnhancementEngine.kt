@@ -48,9 +48,12 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         strength: String,
         mode: String,
         instructions: String,
+        backendStatus: (String) -> Unit = {},
         progress: (Int, Int) -> Unit
     ): Bitmap {
-        val aiBitmap = runActiveRealEsrgan(source, strength, progress)
+        val aiBitmap = runActiveRealEsrgan(
+            source, strength, progress, backendStatus
+        )
         return try {
             applyLocalEditing(
                 aiBitmap,
@@ -377,19 +380,21 @@ class PhotoEnhancementEngine(private val appContext: Context) {
     private fun runActiveRealEsrgan(
         source: Bitmap,
         strength: String,
-        progress: (Int, Int) -> Unit
+        progress: (Int, Int) -> Unit,
+        backendStatus: (String) -> Unit
     ): Bitmap {
         return if (hasPhotoQualityModel()) {
-            runRealEsrganOnnx(source, strength, progress)
+            runRealEsrganOnnx(source, strength, progress, backendStatus)
         } else {
-            runRealEsrgan(source, strength, progress)
+            runRealEsrgan(source, strength, progress, backendStatus)
         }
     }
 
     private fun runRealEsrganOnnx(
         source: Bitmap,
         strength: String,
-        progress: (Int, Int) -> Unit
+        progress: (Int, Int) -> Unit,
+        backendStatus: (String) -> Unit
     ): Bitmap {
         val environment = OrtEnvironment.getEnvironment()
         environment.setTelemetry(false)
@@ -398,6 +403,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         var destination: Bitmap? = null
 
         try {
+            var backendLabel = "ONNX Runtime CPU"
             val activeSession = try {
                 val acceleratedOptions = OrtSession.SessionOptions()
                 try {
@@ -414,6 +420,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                         acceleratedOptions
                     )
                     options = acceleratedOptions
+                    backendLabel = "ONNX Runtime (XNNPACK provider configured)"
                     acceleratedSession
                 } catch (acceleratorError: Exception) {
                     try { acceleratedOptions.close() } catch (_: Exception) {}
@@ -424,6 +431,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                             cpuOptions
                         )
                         options = cpuOptions
+                        backendLabel = "ONNX Runtime CPU fallback"
                         cpuSession
                     } catch (cpuError: Exception) {
                         try { cpuOptions.close() } catch (_: Exception) {}
@@ -434,6 +442,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                 throw Exception("Could not start the high-detail AI model: ${e.message}", e)
             }
             session = activeSession
+            backendStatus(backendLabel)
             val inputName = activeSession.inputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no input")
             val outputName = activeSession.outputNames.firstOrNull()
@@ -590,7 +599,8 @@ class PhotoEnhancementEngine(private val appContext: Context) {
     private fun runRealEsrgan(
         source: Bitmap,
         strength: String,
-        progress: (Int, Int) -> Unit
+        progress: (Int, Int) -> Unit,
+        backendStatus: (String) -> Unit
     ): Bitmap {
 
         var environment: LiteRtEnvironment? = null
@@ -620,26 +630,30 @@ class PhotoEnhancementEngine(private val appContext: Context) {
             val activeEnvironment = environment
                 ?: throw Exception("Could not initialize the on-device AI runtime.")
 
-            // Do not query Environment.getAvailableAccelerators(): some older
-            // Google Play services LiteRT modules have a native crash in that
-            // method. Try GPU with CPU fallback directly, as the official API
-            // recommends. If GPU model creation fails, explicitly create CPU.
-            var gpuWasRequested = true
+            // Compile GPU-only first so the app can report the backend honestly.
+            // If the Play services GPU module is unavailable or still installing,
+            // model creation fails here and we explicitly create a CPU model.
+            var activeBackend = "GPU"
+            var gpuInferenceConfirmed = false
             model = try {
                 CompiledModel.create(
                     appContext.assets,
                     modelFile,
-                    CompiledModel.Options(Accelerator.GPU, Accelerator.CPU),
+                    CompiledModel.Options(Accelerator.GPU),
                     activeEnvironment
                 )
             } catch (_: Exception) {
-                gpuWasRequested = false
+                activeBackend = "CPU"
+                backendStatus("LiteRT CPU fallback (GPU unavailable or not ready)")
                 CompiledModel.create(
                     appContext.assets,
                     modelFile,
                     CompiledModel.Options(Accelerator.CPU),
                     activeEnvironment
                 )
+            }
+            if (activeBackend == "GPU") {
+                backendStatus("LiteRT GPU model compiled; checking first inference")
             }
 
             inputBuffers = model!!.createInputBuffers()
@@ -742,12 +756,17 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                     val aiOutput = try {
                         inputBuffer.writeFloat(inputData)
                         model!!.run(inputBuffers, outputBuffers)
-                        outputBuffer.readFloat()
-                    } catch (gpuInferenceError: Exception) {
-                        if (!gpuWasRequested) throw gpuInferenceError
+                        val output = outputBuffer.readFloat()
+                        if (activeBackend == "GPU" && !gpuInferenceConfirmed) {
+                            gpuInferenceConfirmed = true
+                            backendStatus("LiteRT GPU inference active")
+                        }
+                        output
+                    } catch (inferenceError: Exception) {
+                        if (activeBackend != "GPU") throw inferenceError
 
-                        // A GPU driver can fail after the model compiles. Close
-                        // its resources and retry the current tile on the CPU.
+                        // A GPU driver can fail after model compilation. Release
+                        // GPU resources and retry the current tile on the CPU.
                         inputBuffers.forEach {
                             try { it.close() } catch (_: Exception) {}
                         }
@@ -766,7 +785,8 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                         outputBuffers = model!!.createOutputBuffers()
                         inputBuffer = inputBuffers[0]
                         outputBuffer = outputBuffers[0]
-                        gpuWasRequested = false
+                        activeBackend = "CPU"
+                        backendStatus("LiteRT CPU fallback after GPU inference error")
 
                         inputBuffer.writeFloat(inputData)
                         model!!.run(inputBuffers, outputBuffers)
