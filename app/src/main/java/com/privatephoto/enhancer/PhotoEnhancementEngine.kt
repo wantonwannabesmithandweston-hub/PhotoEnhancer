@@ -11,6 +11,7 @@ import com.google.ai.edge.litert.CompiledModel
 import com.google.ai.edge.litert.Environment as LiteRtEnvironment
 import com.google.ai.edge.litert.TensorBuffer
 import com.google.android.gms.litert.LiteRt
+import com.google.android.gms.litert.client.LiteRtInitializationOptions
 import com.google.android.gms.tasks.Tasks
 import java.io.File
 import java.nio.FloatBuffer
@@ -47,9 +48,12 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         strength: String,
         mode: String,
         instructions: String,
+        backendStatus: (String) -> Unit = {},
         progress: (Int, Int) -> Unit
     ): Bitmap {
-        val aiBitmap = runActiveRealEsrgan(source, strength, progress)
+        val aiBitmap = runActiveRealEsrgan(
+            source, strength, progress, backendStatus
+        )
         return try {
             applyLocalEditing(
                 aiBitmap,
@@ -376,19 +380,21 @@ class PhotoEnhancementEngine(private val appContext: Context) {
     private fun runActiveRealEsrgan(
         source: Bitmap,
         strength: String,
-        progress: (Int, Int) -> Unit
+        progress: (Int, Int) -> Unit,
+        backendStatus: (String) -> Unit
     ): Bitmap {
         return if (hasPhotoQualityModel()) {
-            runRealEsrganOnnx(source, strength, progress)
+            runRealEsrganOnnx(source, strength, progress, backendStatus)
         } else {
-            runRealEsrgan(source, strength, progress)
+            runRealEsrgan(source, strength, progress, backendStatus)
         }
     }
 
     private fun runRealEsrganOnnx(
         source: Bitmap,
         strength: String,
-        progress: (Int, Int) -> Unit
+        progress: (Int, Int) -> Unit,
+        backendStatus: (String) -> Unit
     ): Bitmap {
         val environment = OrtEnvironment.getEnvironment()
         environment.setTelemetry(false)
@@ -397,6 +403,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         var destination: Bitmap? = null
 
         try {
+            var backendLabel = "ONNX Runtime CPU"
             val activeSession = try {
                 val acceleratedOptions = OrtSession.SessionOptions()
                 try {
@@ -413,6 +420,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                         acceleratedOptions
                     )
                     options = acceleratedOptions
+                    backendLabel = "ONNX Runtime (XNNPACK provider configured)"
                     acceleratedSession
                 } catch (acceleratorError: Exception) {
                     try { acceleratedOptions.close() } catch (_: Exception) {}
@@ -423,6 +431,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                             cpuOptions
                         )
                         options = cpuOptions
+                        backendLabel = "ONNX Runtime CPU fallback"
                         cpuSession
                     } catch (cpuError: Exception) {
                         try { cpuOptions.close() } catch (_: Exception) {}
@@ -433,6 +442,7 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                 throw Exception("Could not start the high-detail AI model: ${e.message}", e)
             }
             session = activeSession
+            backendStatus(backendLabel)
             val inputName = activeSession.inputNames.firstOrNull()
                 ?: throw Exception("High-detail model has no input")
             val outputName = activeSession.outputNames.firstOrNull()
@@ -589,7 +599,8 @@ class PhotoEnhancementEngine(private val appContext: Context) {
     private fun runRealEsrgan(
         source: Bitmap,
         strength: String,
-        progress: (Int, Int) -> Unit
+        progress: (Int, Int) -> Unit,
+        backendStatus: (String) -> Unit
     ): Bitmap {
 
         var environment: LiteRtEnvironment? = null
@@ -601,26 +612,59 @@ class PhotoEnhancementEngine(private val appContext: Context) {
         var resultBitmap: Bitmap? = null
 
         try {
-            environment = Tasks.await(
-                LiteRt.initialize(appContext)
-            )
+            val gpuInitializationOptions =
+                LiteRtInitializationOptions.builder()
+                    .setEnableGpu(true)
+                    .build()
 
-            model = CompiledModel.create(
-                appContext.assets,
-                modelFile,
-                CompiledModel.Options(Accelerator.CPU),
-                environment
-            )
+            // Request LiteRT's on-device GPU accelerator. If GPU initialization
+            // is unavailable, continue with a normal CPU environment.
+            environment = try {
+                Tasks.await(
+                    LiteRt.initialize(appContext, gpuInitializationOptions)
+                )
+            } catch (_: Exception) {
+                Tasks.await(LiteRt.initialize(appContext))
+            }
 
-            inputBuffers = model.createInputBuffers()
-            outputBuffers = model.createOutputBuffers()
+            val activeEnvironment = environment
+                ?: throw Exception("Could not initialize the on-device AI runtime.")
+
+            // Compile GPU-only first so the app can report the backend honestly.
+            // If the Play services GPU module is unavailable or still installing,
+            // model creation fails here and we explicitly create a CPU model.
+            var activeBackend = "GPU"
+            var gpuInferenceConfirmed = false
+            model = try {
+                CompiledModel.create(
+                    appContext.assets,
+                    modelFile,
+                    CompiledModel.Options(Accelerator.GPU),
+                    activeEnvironment
+                )
+            } catch (_: Exception) {
+                activeBackend = "CPU"
+                backendStatus("LiteRT CPU fallback (GPU unavailable or not ready)")
+                CompiledModel.create(
+                    appContext.assets,
+                    modelFile,
+                    CompiledModel.Options(Accelerator.CPU),
+                    activeEnvironment
+                )
+            }
+            if (activeBackend == "GPU") {
+                backendStatus("LiteRT GPU model compiled; checking first inference")
+            }
+
+            inputBuffers = model!!.createInputBuffers()
+            outputBuffers = model!!.createOutputBuffers()
 
             if (inputBuffers.size != 1 || outputBuffers.size != 1) {
                 throw Exception("Unexpected AI model tensor count")
             }
 
-            val inputBuffer = inputBuffers[0]
-            val outputBuffer = outputBuffers[0]
+            var inputBuffer = inputBuffers[0]
+            var outputBuffer = outputBuffers[0]
 
             val width = source.width
             val height = source.height
@@ -709,10 +753,45 @@ class PhotoEnhancementEngine(private val appContext: Context) {
                         }
                     }
 
-                    inputBuffer.writeFloat(inputData)
-                    model.run(inputBuffers, outputBuffers)
+                    val aiOutput = try {
+                        inputBuffer.writeFloat(inputData)
+                        model!!.run(inputBuffers, outputBuffers)
+                        val output = outputBuffer.readFloat()
+                        if (activeBackend == "GPU" && !gpuInferenceConfirmed) {
+                            gpuInferenceConfirmed = true
+                            backendStatus("LiteRT GPU inference active")
+                        }
+                        output
+                    } catch (inferenceError: Exception) {
+                        if (activeBackend != "GPU") throw inferenceError
 
-                    val aiOutput = outputBuffer.readFloat()
+                        // A GPU driver can fail after model compilation. Release
+                        // GPU resources and retry the current tile on the CPU.
+                        inputBuffers.forEach {
+                            try { it.close() } catch (_: Exception) {}
+                        }
+                        outputBuffers.forEach {
+                            try { it.close() } catch (_: Exception) {}
+                        }
+                        try { model?.close() } catch (_: Exception) {}
+
+                        model = CompiledModel.create(
+                            appContext.assets,
+                            modelFile,
+                            CompiledModel.Options(Accelerator.CPU),
+                            activeEnvironment
+                        )
+                        inputBuffers = model!!.createInputBuffers()
+                        outputBuffers = model!!.createOutputBuffers()
+                        inputBuffer = inputBuffers[0]
+                        outputBuffer = outputBuffers[0]
+                        activeBackend = "CPU"
+                        backendStatus("LiteRT CPU fallback after GPU inference error")
+
+                        inputBuffer.writeFloat(inputData)
+                        model!!.run(inputBuffers, outputBuffers)
+                        outputBuffer.readFloat()
+                    }
 
                     if (aiOutput.size != OUTPUT_ELEMENTS) {
                         throw Exception("Unexpected AI output size")

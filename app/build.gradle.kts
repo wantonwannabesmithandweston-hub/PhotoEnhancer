@@ -12,8 +12,8 @@ android {
         applicationId = "com.privatephoto.enhancer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.8"
+        versionCode = 11
+        versionName = "1.10"
 
         // This personal-use build targets the user's modern 64-bit Android phone.
         // Avoid bundling unused x86 and 32-bit native runtimes in the APK.

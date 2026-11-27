@@ -34,12 +34,6 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import java.util.UUID
 
-import com.google.ai.edge.litert.Accelerator
-import com.google.ai.edge.litert.CompiledModel
-import com.google.ai.edge.litert.Environment as LiteRtEnvironment
-import com.google.ai.edge.litert.TensorBuffer
-import com.google.android.gms.litert.LiteRt
-import com.google.android.gms.tasks.Tasks
 
 import java.util.concurrent.Executors
 import java.io.File
@@ -464,11 +458,7 @@ class MainActivity : Activity() {
         } else {
             "Download High-Detail Model (34 MB)"
         }
-        testAiButton.text = if (hasPhotoQualityModel()) {
-            "Test High-Detail Model"
-        } else {
-            "Test AI Model"
-        }
+        testAiButton.text = "Test Active AI Model & Acceleration"
         downloadModelButton.isEnabled =
             !hasPhotoQualityModel() && !isDownloadingPhotoModel &&
                 !isProcessing && !isSaving && !isModelTesting
@@ -638,99 +628,72 @@ class MainActivity : Activity() {
     private fun testAiModel() {
         if (isModelTesting || isProcessing || isSaving) return
 
-        if (hasPhotoQualityModel()) {
-            isModelTesting = true
-            setControlsEnabled(false)
-            statusText.text = "Testing high-detail Real-ESRGAN x4plus model..."
-
-            executor.execute {
-                var resultMessage: String
-                try {
-                    validatePhotoModel(photoQualityModelFile)
-                    resultMessage =
-                        "HIGH-DETAIL MODEL TEST PASSED!\n" +
-                        "Real-ESRGAN x4plus ONNX inference completed successfully.\n" +
-                        "Input: 128 × 128 RGB\n" +
-                        "Output: 512 × 512 RGB\n" +
-                        "4× high-detail upscaling is ready."
-                } catch (e: Exception) {
-                    resultMessage =
-                        "High-detail model test failed:\n${e.message}"
-                }
-
-                runOnUiThread {
-                    if (isFinishing || isDestroyed) return@runOnUiThread
-                    isModelTesting = false
-                    setControlsEnabled(true)
-                    statusText.text = resultMessage
-                }
-            }
-            return
-        }
-
         isModelTesting = true
         setControlsEnabled(false)
-        statusText.text = "Testing Real-ESRGAN AI model..."
+        statusText.text = "Testing the active on-device AI model and accelerator..."
 
         executor.execute {
-            var environment: LiteRtEnvironment? = null
-            var model: CompiledModel? = null
-            var inputs: List<TensorBuffer> = emptyList()
-            var outputs: List<TensorBuffer> = emptyList()
-
+            var testInput: Bitmap? = null
+            var testOutput: Bitmap? = null
+            var backendLabel = "Selecting backend"
             var resultMessage: String
 
             try {
-                environment = Tasks.await(
-                    LiteRt.initialize(applicationContext)
+                val sample = Bitmap.createBitmap(
+                    128,
+                    128,
+                    Bitmap.Config.ARGB_8888
                 )
+                testInput = sample
 
-                model = CompiledModel.create(
-                    assets,
-                    modelFile,
-                    CompiledModel.Options(Accelerator.CPU),
-                    environment
+                val pixels = IntArray(128 * 128)
+                for (y in 0 until 128) {
+                    for (x in 0 until 128) {
+                        val red = x * 255 / 127
+                        val green = y * 255 / 127
+                        val blue = if (((x / 16) + (y / 16)) % 2 == 0) 64 else 192
+                        pixels[y * 128 + x] = Color.rgb(red, green, blue)
+                    }
+                }
+                sample.setPixels(pixels, 0, 128, 0, 0, 128, 128)
+
+                val enhanced = PhotoEnhancementEngine(applicationContext).enhance(
+                    source = sample,
+                    strength = "Balanced",
+                    mode = "Natural Restore",
+                    instructions = "",
+                    backendStatus = { backend ->
+                        backendLabel = backend
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                statusText.text = "Testing active AI path • $backend"
+                            }
+                        }
+                    },
+                    progress = { completed, total ->
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                statusText.text =
+                                    "Testing active AI path • $backendLabel • $completed/$total tiles"
+                            }
+                        }
+                    }
                 )
-
-                inputs = model.createInputBuffers()
-                outputs = model.createOutputBuffers()
-
-                if (inputs.size != 1 || outputs.size != 1) {
-                    throw Exception("Unexpected model tensor count")
-                }
-
-                inputs[0].writeFloat(FloatArray(INPUT_ELEMENTS) { 0.5f })
-                model.run(inputs, outputs)
-
-                val testOutput = outputs[0].readFloat()
-
-                if (testOutput.size != OUTPUT_ELEMENTS) {
-                    throw Exception("Unexpected output size")
-                }
-
-                if (testOutput.any { it.isNaN() || it.isInfinite() }) {
-                    throw Exception("Invalid model output")
-                }
+                testOutput = enhanced
 
                 resultMessage =
                     "AI MODEL TEST PASSED!\n" +
-                    "Real inference completed successfully.\n" +
+                    "$backendLabel\n" +
                     "Input: 128 × 128 RGB\n" +
                     "Output: 512 × 512 RGB\n" +
-                    "4× AI upscaling is ready."
+                    "The active on-device enhancement pipeline completed successfully."
 
             } catch (e: Exception) {
-                resultMessage = "AI model test failed:\n${e.message}"
-
+                resultMessage =
+                    "AI model test failed:\n${e.message ?: "unknown error"}"
             } finally {
-                inputs.forEach {
-                    try { it.close() } catch (_: Exception) {}
-                }
-                outputs.forEach {
-                    try { it.close() } catch (_: Exception) {}
-                }
-                try { model?.close() } catch (_: Exception) {}
-                try { environment?.close() } catch (_: Exception) {}
+                testInput?.let { if (!it.isRecycled) it.recycle() }
+                testOutput?.let { if (!it.isRecycled) it.recycle() }
             }
 
             runOnUiThread {
@@ -910,6 +873,14 @@ class MainActivity : Activity() {
                 val stage = progress.getString(
                     PhotoEnhancementWorker.KEY_STAGE
                 ) ?: "Preparing on-device enhancement..."
+                val backend = progress.getString(
+                    PhotoEnhancementWorker.KEY_BACKEND
+                ).orEmpty()
+                val visibleStage = if (backend.isNotBlank()) {
+                    "$stage • $backend"
+                } else {
+                    stage
+                }
 
                 val completed = progress.getInt(
                     PhotoEnhancementWorker.KEY_COMPLETED_TILES, 0
@@ -936,9 +907,9 @@ class MainActivity : Activity() {
                     } else {
                         ""
                     }
-                    "$stage: $completed/$total tiles ($percent%)$etaText"
+                    "$visibleStage: $completed/$total tiles ($percent%)$etaText"
                 } else {
-                    stage
+                    visibleStage
                 }
             }
 
@@ -989,8 +960,16 @@ class MainActivity : Activity() {
                 displayCurrentPhoto()
                 setControlsEnabled(true)
 
+                val completedBackend = info.progress.getString(
+                    PhotoEnhancementWorker.KEY_BACKEND
+                ).orEmpty()
+                val backendSuffix = if (completedBackend.isNotBlank()) {
+                    " • $completedBackend"
+                } else {
+                    ""
+                }
                 statusText.text =
-                    "Complete! 4× on-device AI upscale • $selectedMode • $selectedStrength strength."
+                    "Complete! 4× on-device AI upscale • $selectedMode • $selectedStrength strength$backendSuffix."
             }
 
             WorkInfo.State.FAILED -> {
