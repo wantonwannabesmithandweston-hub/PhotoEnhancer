@@ -152,6 +152,7 @@ class PhotoEnhancementWorker(
                     lastProgressUpdateAt = now
                 }
             }
+            )
 
             enhanced = processedBitmap
             if (isStopped) throw CancellationException("Enhancement was cancelled.")
